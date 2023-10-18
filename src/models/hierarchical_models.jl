@@ -11,7 +11,7 @@ module hierarchical_models
     """
         hierarchical_model_normal_prior(y::Matrix{Float64}, n_groups::Int64, size_groups::Vector{Int64})
     """
-    function hierarchical_mean_model_normal_prior(y::Matrix{Float64}, n_groups::Int64, size_groups::Vector{Int64})
+    Turing.DynamicPPL.@model function hierarchical_mean_model_normal_prior(y::Matrix{Float64}, n_groups::Int64, size_groups::Vector{Int64})
         # --- Prior distributions:
         # variance y
         sigma2_y ~ Turing.TruncatedNormal(1., 1., 0., Inf)
@@ -34,7 +34,7 @@ module hierarchical_models
     """
         hierarchical_lm_normal_prior(y::Matrix{Float64}, X_global::Array{Float64, 3}, X_groups::Array{Float64, 3}, n_groups::Int64)
     """
-    @model function hierarchical_lm_normal_prior(y::Matrix{Float64}, X_global::Array{Float64, 3}, X_groups::Array{Float64, 3}, n_groups::Int64)
+    Turing.DynamicPPL.@model function hierarchical_lm_normal_prior(y::Matrix{Float64}, X_global::Array{Float64, 3}, X_groups::Array{Float64, 3}, n_groups::Int64)
         p_global = size(X_global)[3]
         p_groups = size(X_groups)[3]
         # container for beta group specific
@@ -63,28 +63,34 @@ module hierarchical_models
     
     """
         hierarchical_lm_hs_prior(y::Matrix{Float64}, X_global::Array{Float64, 3}, X_groups::Array{Float64, 3}, n_groups::Int64)
+
+        X_global has dimention (n_groups, n, p). Does NOT include the intercept
     """
-    @model function hierarchical_lm_hs_prior(y::Matrix{Float64}, X_global::Array{Float64, 3}, X_groups::Array{Float64, 3}, n_groups::Int64)
+    Turing.DynamicPPL.@model function hierarchical_lm_hs_prior(y::Matrix{Float64}, X_global::Array{Float64, 3}, X_groups::Array{Float64, 3}, n_groups::Int64)
         p_global = size(X_global)[3]
         p_groups = size(X_groups)[3]
         # container for beta group specific
         beta_groups = zeros(n_groups, p_groups)
-
+    
         # --- Priors:
         # variances y
         sigma2_y ~ Turing.TruncatedNormal(1., 1., 0., Inf)
         # std dev beta group specific
         sigma_beta_group ~ Turing.TruncatedNormal(1., 1., 0., Inf)
         
-        # beta global effect:
-        beta_global ~ Turing.MultivariateNormal(zeros(p_global), sqrt(5.))
+        # beta global effect with HS prior:
+        half_cauchy = Turing.truncated(Turing.Cauchy(0, 1); lower=0.)
+        tau ~ half_cauchy
+        lambda ~ Turing.filldist(half_cauchy, p_global)
+        beta_global_int ~ Turing.Normal(0, 5)  # no shrinkage on the intercept
+        beta_global ~ Turing.MvNormal(Turing.Diagonal((lambda .* tau).^2))
         # beta group specific effects
         dist_beta_group = Turing.MultivariateNormal(zeros(p_groups), sigma_beta_group)
 
         # --- Likelihood
         for l in range(1, n_groups)
             beta_groups[l, :] ~ dist_beta_group
-            mu_l = X_groups[l, :, :] * beta_groups[l, :] + X_global[l, :, :] * beta_global
+            mu_l = X_groups[l, :, :] * beta_groups[l, :] + X_global[l, :, :] * beta_global .+ beta_global_int
             y[:, l] ~ Turing.MultivariateNormal(mu_l, sigma2_y)
         end
 
