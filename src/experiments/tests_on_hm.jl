@@ -8,8 +8,9 @@ using StatsPlots
 using Random
 using DataFrames
 
-include("../utils/posterior_inference.jl")
-include("../models/hierarchical_models.jl")
+abs_project_path = normpath(joinpath(@__FILE__,"..", ".."))
+include(joinpath(abs_project_path, "utils", "posterior_inference.jl"))
+include(joinpath(abs_project_path, "models", "hierarchical_models.jl"))
 
 
 # Generate data from linear mixed model
