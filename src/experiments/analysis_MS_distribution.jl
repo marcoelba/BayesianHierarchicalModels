@@ -46,7 +46,7 @@ function get_t(mirror_coeffs; fdr_q=0.1)
 end
 
 
-
+# Generate some data
 n = 100
 p = 100
 n_zero_coef = 95
@@ -80,17 +80,26 @@ Omega_n = Omega_0 + X'*X / sigma_y
 Sigma_n = inv(Omega_n)
 b_n = b_0 + Sigma_n * X' * y / sigma_y
 
+histogram(b_n, bins=100)
+vline!([b_n[96]])
+histogram(2*b_n, bins=10)
+
 beta_posterior_dist = Normal.(b_n, sqrt.(diag(Sigma_n)))
 
 # Get analytical values for MS
-ms_coeffs = b_n - 2 * sqrt.(diag(Sigma_n))
-ms_coeffs = 2 * b_n - sqrt.(diag(Sigma_n))
+ms_coeffs = abs.(b_n) - sqrt.(diag(Sigma_n))
+ms_coeffs = abs.(b_n) - 2 * sqrt.(diag(Sigma_n))
+ms_coeffs = (abs.(b_n) - sqrt.(diag(Sigma_n))) .* vcat(ones(n_zero_coef)*0.1, ones(p-n_zero_coef))
+
 
 histogram(ms_coeffs, bins=10)
 vline!([0], width=2)
 
 # Calculate FDR/TPR and the MS cutoff
 optimal_t = get_t(ms_coeffs; fdr_q=0.1)
+sum(ms_coeffs .< -optimal_t)
+sum(ms_coeffs .> optimal_t)
+
 classification_metrics.wrapper_metrics(
     beta_true .!= 0.,
     ms_coeffs .> optimal_t
@@ -140,7 +149,7 @@ rand_ms["optimal_t"]
 sum(rand_ms["ms_coef"] .> rand_ms["optimal_t"])
 sum(rand_ms["ms_coef"] .< -rand_ms["optimal_t"])
 
-n_replica = 500
+n_replica = 100
 ms_matrix = zeros(n_replica, p)
 for simu in 1:n_replica
     rand_ms = RandMirror.randomisation_ds.real_data_rand_ms(
@@ -155,3 +164,4 @@ end
 
 histogram(mean(ms_matrix, dims=1)[1, :], bins=10)
 vline!([0], width=2)
+sum(mean(ms_matrix, dims=1)[1, :] .> 1)

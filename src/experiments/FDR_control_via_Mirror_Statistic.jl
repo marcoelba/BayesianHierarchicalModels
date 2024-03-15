@@ -66,7 +66,13 @@ end
 
 
 dynamic_nuts = externalsampler(DynamicHMC.NUTS())
-nuts_lm = sample(lm_horseshoe_prior(y, X), dynamic_nuts, 1000)
+
+n_iter = 3000
+nuts_lm = sample(
+    lin_model(y, X),
+    SGLD(stepsize=PolynomialStepsize(0.001)),
+    n_iter
+)
 nuts_chains = DataFrames.DataFrame(nuts_lm)
 
 df_hpd = posterior_inference.get_parameters_interval(
