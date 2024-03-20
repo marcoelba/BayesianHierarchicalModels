@@ -97,11 +97,12 @@ end
 function polynomial_decay(t::Int64; a::Float32=0.01f0, b::Float32=0.01f0, gamma::Float32=0.35f0)
     a * (b + t)^(-gamma)
 end
-plot(range(1, 1000), polynomial_decay.(range(1, 1000), gamma=0.5f0, a=0.1f0))
+
+plot(range(1, 1000), polynomial_decay.(range(1, 1000)))
 plot!(range(1, 1000), polynomial_decay.(range(1, 1000), gamma=0.5f0, a=0.01f0))
 
 
-function logpdf_normal(x::Array{Float32}, mu::Array{Float32}, sd::Float32=1f0)
+function logpdf_loss(x::Array{Float32}, mu::Array{Float32}, sd::Float32=1f0)
     -0.5f0 .* log(2f0*pi) - log(sd) .- 0.5f0 .* ((x .- mu) ./ sd).^2f0
 end
 
@@ -115,10 +116,10 @@ model = NC_HS(
 Flux.params(model)
 
 optim = Flux.Descent(0.01f0)
-use_sgld = false
+use_sgld = true
 
 # Train loop
-n_iter = 10000
+n_iter = 20000
 
 optim = Flux.setup(optim, model)
 
@@ -126,6 +127,7 @@ train_loss = Float32[]
 val_loss = Float32[]
 
 weights_mat = zeros32(n_iter, p)
+scale_mat = zeros32(n_iter, p)
 
 
 for epoch in 1:n_iter
@@ -133,10 +135,9 @@ for epoch in 1:n_iter
     loss, grads = Flux.withgradient(model) do m
         # Evaluate model and loss inside gradient context:
         y_pred = m(X_train)
-        neg_loglik = -sum(logpdf_loss(y_train, y_pred))
-        neg_logprior = -sum(logpdf_prior(m.weight))
+        neg_loglik = -sum(logpdf_loss(y_train, y_pred[1]))
 
-        neg_loglik + neg_logprior
+        neg_loglik + y_pred[2]
     end
 
     # Update learning rate with Polynomial Stepsize decay
@@ -154,12 +155,27 @@ for epoch in 1:n_iter
     push!(train_loss, loss)  # logging, outside gradient context
 
     weights_mat[epoch, :] = model.weight
+    scale_mat[epoch, :] = model.scale
+
 end
 
 plot(train_loss)
 plot(train_loss[100:n_iter])
 
-plot(weights_mat)
+weights_posterior = weights_mat
+scales_posterior = Flux.softplus.(scale_mat)
+betas_posterior = weights_posterior .* scales_posterior
 
-plot(weights_mat[:, 1])
-density(weights_mat[5000:n_iter, 1])
+plot(weights_posterior[:, p - p1 - 50:p], label=false)
+plot(scales_posterior[:, p - p1 - 50:p], label=false)
+plot(betas_posterior[:, p - p1 - 50:p], label=false)
+
+
+density(betas_posterior[5000:n_iter, 1])
+density(weights_posterior[5000:n_iter, 1])
+
+density(betas_posterior[5000:n_iter, 3])
+density(betas_posterior[5000:n_iter, p])
+
+scales_posterior = scales_posterior[15000:n_iter, :]
+1. .- 1. ./ (1. .+ mean(scales_posterior, dims=1).^2 * n)
