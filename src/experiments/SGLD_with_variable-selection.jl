@@ -65,10 +65,11 @@ Flux.@functor NC_HS
 function (m::NC_HS)(x::AbstractVecOrMat)
     # scale must be positive
     scale_t = Flux.softplus.(m.scale)
-    beta = m.weight .* scale_t
+    # beta = m.weight .* scale_t
+    beta = m.weight
 
     y_pred = beta * x .+ m.bias
-    neg_log_penalty = -sum(m.prior_weight(m.weight)) - sum(m.prior_scale(scale_t))
+    neg_log_penalty = -sum(m.prior_weight(m.weight, sd=scale_t)) - sum(m.prior_scale(scale_t))
 
     return (y_pred, neg_log_penalty)
 end
@@ -90,11 +91,12 @@ function logpdf_cauchy(x::Array{Float32})
     -log.(pi .* (1f0 .+ x.^2))
 end
 
-function logpdf_normal_prior(x::Array{Float32}, mu::Float32=0f0, sd::Float32=1f0)
-    -0.5f0 .* log(2f0*pi) - log(sd) .- 0.5f0 .* ((x .- mu) ./ sd).^2f0
+
+function logpdf_normal_prior(x::Array{Float32}; mu::Float32=0f0, sd::Array{Float32}=ones32(size(x)...))
+    -0.5f0 .* log.(2f0*pi) .- log.(sd) .- 0.5f0 .* ((x .- mu) ./ sd).^2f0
 end
 
-function polynomial_decay(t::Int64; a::Float32=0.01f0, b::Float32=0.01f0, gamma::Float32=0.35f0)
+function polynomial_decay(t::Int64; a::Float32=0.05f0, b::Float32=0.01f0, gamma::Float32=0.35f0)
     a * (b + t)^(-gamma)
 end
 
@@ -176,6 +178,13 @@ density(weights_posterior[5000:n_iter, 1])
 
 density(betas_posterior[5000:n_iter, 3])
 density(betas_posterior[5000:n_iter, p])
+density(weights_posterior[5000:n_iter, p])
 
 scales_posterior = scales_posterior[15000:n_iter, :]
-1. .- 1. ./ (1. .+ mean(scales_posterior, dims=1).^2 * n)
+1. .- 1. ./ (1. .+ mean(scales_posterior.^2, dims=1) * n)
+
+
+function coef_selection(lambda, n, tau)
+    1. .- 1. ./ (1. .+ lambda * n * tau)
+end
+coef_selection(mean(scales_posterior, dims=1).^2, n, 1)
