@@ -30,3 +30,18 @@ concrete_distribution(ni, delta, alpha)
 
 pdf.(Bernoulli.(alpha), round.(ni))
 pdf.(Bernoulli.(alpha), ni)
+
+
+
+# Gumbel trick
+lambda = 0.01
+dist_gum = Distributions.Gumbel()
+Distributions.rand(dist_gum)
+
+# logit inclusion prob
+alpha = -1
+Flux.sigmoid(alpha)
+dist_bern = Distributions.Bernoulli(Flux.sigmoid(alpha))
+sum(Distributions.rand(dist_bern, 1000)) / 1000
+
+sum(Flux.sigmoid((alpha .+ Distributions.rand(dist_gum, 1000)) ./ lambda)) / 1000

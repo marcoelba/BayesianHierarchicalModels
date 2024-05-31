@@ -69,7 +69,7 @@ function (m::NC_HS)(x::AbstractVecOrMat)
     beta = m.weight
 
     y_pred = beta * x .+ m.bias
-    neg_log_penalty = -sum(m.prior_weight(m.weight, sd=scale_t)) - sum(m.prior_scale(scale_t))
+    neg_log_penalty = -sum(m.prior_weight(beta, sd=scale_t)) - sum(m.prior_scale(scale_t))
 
     return (y_pred, neg_log_penalty)
 end
@@ -83,8 +83,8 @@ function init_scales(in, out)
     0.1f0 * randn32(in, out)
 end
 
-function logpdf_truncated_cauchy(x::Array{Float32}, t::Float32=0.5f0)
-    -log.(pi .* (1f0 .+ x.^2)) .- log.(t)
+function logpdf_truncated_cauchy(x::Array{Float32}; ni::Float32=3f0, t::Float32=0.5f0)
+    -log.(ni .* pi .* (1f0 .+ (x ./ ni).^2)) .- log.(t)
 end
 
 function logpdf_cauchy(x::Array{Float32})
@@ -96,7 +96,7 @@ function logpdf_normal_prior(x::Array{Float32}; mu::Float32=0f0, sd::Array{Float
     -0.5f0 .* log.(2f0*pi) .- log.(sd) .- 0.5f0 .* ((x .- mu) ./ sd).^2f0
 end
 
-function polynomial_decay(t::Int64; a::Float32=0.05f0, b::Float32=0.01f0, gamma::Float32=0.35f0)
+function polynomial_decay(t::Int64; a::Float32=0.01f0, b::Float32=0.01f0, gamma::Float32=0.35f0)
     a * (b + t)^(-gamma)
 end
 
@@ -187,4 +187,4 @@ scales_posterior = scales_posterior[15000:n_iter, :]
 function coef_selection(lambda, n, tau)
     1. .- 1. ./ (1. .+ lambda * n * tau)
 end
-coef_selection(mean(scales_posterior, dims=1).^2, n, 1)
+coef_selection(mean(scales_posterior, dims=1).^2, n, 3)

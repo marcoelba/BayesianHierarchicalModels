@@ -2,7 +2,7 @@
 
 julia_version = "1.9.3"
 manifest_format = "2.0"
-project_hash = "6c0b2637a23461a91515fb1e950fd629f6fe600d"
+project_hash = "a069cb3245b1cd1bad1ce783bbc0f29bd3ae37e8"
 
 [[deps.ADTypes]]
 git-tree-sha1 = "f2b16fe1a3491b295105cae080c2a5f77a842718"
@@ -193,9 +193,9 @@ version = "1.5.0"
 
 [[deps.Bijectors]]
 deps = ["ArgCheck", "ChainRules", "ChainRulesCore", "ChangesOfVariables", "Compat", "Distributions", "Functors", "InverseFunctions", "IrrationalConstants", "LinearAlgebra", "LogExpFunctions", "MappedArrays", "Random", "Reexport", "Requires", "Roots", "SparseArrays", "Statistics"]
-git-tree-sha1 = "8eacff457e5b8c13a97848484ad650dabbffa0fc"
+git-tree-sha1 = "49491db48b1c70eefa5115e626100dbd6c0ff4c0"
 uuid = "76274a88-744f-5084-9051-94815aaf08c4"
-version = "0.13.7"
+version = "0.13.12"
 
     [deps.Bijectors.extensions]
     BijectorsDistributionsADExt = "DistributionsAD"
@@ -605,13 +605,14 @@ version = "0.9.21"
 uuid = "7b1f6079-737a-58dc-b8bc-7a2ca5c1b5ee"
 
 [[deps.FillArrays]]
-deps = ["LinearAlgebra", "Random"]
-git-tree-sha1 = "a20eaa3ad64254c61eeb5f230d9306e937405434"
+deps = ["LinearAlgebra"]
+git-tree-sha1 = "0653c0a2396a6da5bc4766c43041ef5fd3efbe57"
 uuid = "1a297f60-69ca-5386-bcde-b61e274b549b"
-version = "1.6.1"
-weakdeps = ["SparseArrays", "Statistics"]
+version = "1.11.0"
+weakdeps = ["PDMats", "SparseArrays", "Statistics"]
 
     [deps.FillArrays.extensions]
+    FillArraysPDMatsExt = "PDMats"
     FillArraysSparseArraysExt = "SparseArrays"
     FillArraysStatisticsExt = "Statistics"
 

@@ -1,12 +1,9 @@
 # Bayesian models in Turing
-
-using Pkg
-Pkg.status()
-
 using Turing
 using Distributions
 using StatsPlots
 using Random
+using LinearAlgebra
 using DataFrames
 
 

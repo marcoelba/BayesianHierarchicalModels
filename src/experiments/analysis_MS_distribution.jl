@@ -115,7 +115,7 @@ for jj in 1:p
         beta_jj_mc;
         aggregation=median,
         spread_function="quantile"
-    )    
+    )
 end
 histogram(ms_coeffs_mc, bins=10)
 vline!([0], width=2)
@@ -126,6 +126,39 @@ classification_metrics.wrapper_metrics(
     beta_true .!= 0.,
     ms_coeffs_mc .> optimal_t
 )
+
+
+
+# Sampling MS
+mc_samples = 1000
+posterior_ms_coefs = zeros(p, mc_samples)
+
+for cov in 1:p
+    posterior_samples = rand(beta_posterior_dist[cov], 2*mc_samples)
+    
+    mirror_coeffs = abs.(posterior_samples[1:mc_samples] + posterior_samples[mc_samples+1:mc_samples*2]) -
+        abs.(posterior_samples[1:mc_samples] - posterior_samples[mc_samples+1:mc_samples*2])
+    
+    posterior_ms_coefs[cov, :] = mirror_coeffs
+end
+
+
+histogram(posterior_ms_coefs[1, :], alpha=0.5)
+histogram!(posterior_ms_coefs[2, :], alpha=0.5)
+histogram!(posterior_ms_coefs[3, :], alpha=0.5)
+
+histogram(posterior_ms_coefs[p-2, :], alpha=0.5)
+histogram!(posterior_ms_coefs[p-1, :], alpha=0.5)
+histogram!(posterior_ms_coefs[p, :], alpha=0.5)
+
+# MS selection with posterior mean
+mean_ms_coefs = np.mean(posterior_ms_coefs, axis=1)
+plt.hist(mean_ms_coefs)
+plt.show()
+
+opt_t = get_t(mean_ms_coefs, fdr_q=0.1)
+print(opt_t)
+classification_metrics(true_coef=beta_true != 0, estimated_coef=mean_ms_coefs >= opt_t)
 
 
 # With randomisation and MS
