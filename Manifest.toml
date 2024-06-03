@@ -2,7 +2,7 @@
 
 julia_version = "1.9.3"
 manifest_format = "2.0"
-project_hash = "a069cb3245b1cd1bad1ce783bbc0f29bd3ae37e8"
+project_hash = "d0734294a15835e506db049b756113692e48428b"
 
 [[deps.ADTypes]]
 git-tree-sha1 = "f2b16fe1a3491b295105cae080c2a5f77a842718"
@@ -82,10 +82,22 @@ uuid = "576499cb-2369-40b2-a588-c64705576edc"
 version = "0.4.3"
 
 [[deps.AdvancedVI]]
-deps = ["Bijectors", "Distributions", "DistributionsAD", "DocStringExtensions", "ForwardDiff", "LinearAlgebra", "ProgressMeter", "Random", "Requires", "StatsBase", "StatsFuns", "Tracker"]
-git-tree-sha1 = "1f919a9c59cf3dfc68b64c22c453a2e356fca473"
+deps = ["ADTypes", "Bijectors", "DiffResults", "Distributions", "DistributionsAD", "DocStringExtensions", "ForwardDiff", "LinearAlgebra", "ProgressMeter", "Random", "Requires", "StatsBase", "StatsFuns", "Tracker"]
+git-tree-sha1 = "3e97de1a2ccce08978cd80570d8cbb9ff3f08bd3"
 uuid = "b5ca4192-6429-45e5-a2d9-87aec30a685c"
-version = "0.2.4"
+version = "0.2.6"
+
+    [deps.AdvancedVI.extensions]
+    AdvancedVIEnzymeExt = ["Enzyme"]
+    AdvancedVIFluxExt = ["Flux"]
+    AdvancedVIReverseDiffExt = ["ReverseDiff"]
+    AdvancedVIZygoteExt = ["Zygote"]
+
+    [deps.AdvancedVI.weakdeps]
+    Enzyme = "7da242da-08ed-463a-9acd-ee780be4f1d9"
+    Flux = "587475ba-b771-5e3f-ad9e-33799f191a9c"
+    ReverseDiff = "37e2e3b7-166d-5795-8a7a-e32c996b4267"
+    Zygote = "e88e6eb3-aa80-5325-afca-941959d7151f"
 
 [[deps.ArgCheck]]
 git-tree-sha1 = "a3a402a35a2f7e0b87828ccabbd5ebfbebe356b4"
@@ -345,6 +357,32 @@ weakdeps = ["Dates", "LinearAlgebra"]
 deps = ["Artifacts", "Libdl"]
 uuid = "e66e0078-7015-5450-92f7-15fbd957f2ae"
 version = "1.0.5+0"
+
+[[deps.ComponentArrays]]
+deps = ["ArrayInterface", "ChainRulesCore", "ForwardDiff", "Functors", "LinearAlgebra", "PackageExtensionCompat", "StaticArrayInterface", "StaticArraysCore"]
+git-tree-sha1 = "e3ced166fcefe2352b73f9ae3e1cf6f2c5d4e806"
+uuid = "b0b7db55-cfe3-40fc-9ded-d10e2dbeff66"
+version = "0.15.10"
+
+    [deps.ComponentArrays.extensions]
+    ComponentArraysAdaptExt = "Adapt"
+    ComponentArraysConstructionBaseExt = "ConstructionBase"
+    ComponentArraysGPUArraysExt = "GPUArrays"
+    ComponentArraysRecursiveArrayToolsExt = "RecursiveArrayTools"
+    ComponentArraysReverseDiffExt = "ReverseDiff"
+    ComponentArraysSciMLBaseExt = "SciMLBase"
+    ComponentArraysTrackerExt = "Tracker"
+    ComponentArraysZygoteExt = "Zygote"
+
+    [deps.ComponentArrays.weakdeps]
+    Adapt = "79e6a3ab-5dfb-504d-930d-738a2a938a0e"
+    ConstructionBase = "187b0558-2788-49d3-abe0-74a17ed4e7c9"
+    GPUArrays = "0c68f7d7-f131-5f86-a1c3-88cf8149b2d7"
+    RecursiveArrayTools = "731186ca-8d62-57ce-b412-fbd966d074cd"
+    ReverseDiff = "37e2e3b7-166d-5795-8a7a-e32c996b4267"
+    SciMLBase = "0bca4576-84f4-4d90-8ffe-ffa030f20462"
+    Tracker = "9f7883ad-71c0-57eb-9f7f-b5c9e6d3789c"
+    Zygote = "e88e6eb3-aa80-5325-afca-941959d7151f"
 
 [[deps.CompositionsBase]]
 git-tree-sha1 = "802bb88cd69dfd1509f6670416bd4434015693ad"
@@ -795,6 +833,11 @@ deps = ["InteractiveUtils", "MacroTools", "Test"]
 git-tree-sha1 = "5d8c5713f38f7bc029e26627b687710ba406d0dd"
 uuid = "7869d1d1-7146-5819-86e3-90919afe41df"
 version = "0.4.12"
+
+[[deps.IfElse]]
+git-tree-sha1 = "debdd00ffef04665ccbb3e150747a77560e8fad1"
+uuid = "615f187c-cbe4-4ef1-ba3b-2fcf58d6d173"
+version = "0.1.1"
 
 [[deps.InitialValues]]
 git-tree-sha1 = "4da0f88e9a39111c2fa3add390ab15f3a44f3ca3"
@@ -1369,6 +1412,12 @@ git-tree-sha1 = "67eae2738d63117a196f497d7db789821bce61d1"
 uuid = "90014a1f-27ba-587c-ab20-58faa44d9150"
 version = "0.11.17"
 
+[[deps.PackageExtensionCompat]]
+git-tree-sha1 = "fb28e33b8a95c4cee25ce296c817d89cc2e53518"
+uuid = "65ce6f38-6b18-4e1d-a461-8949797d7930"
+version = "1.0.2"
+weakdeps = ["Requires", "TOML"]
+
 [[deps.Parameters]]
 deps = ["OrderedCollections", "UnPack"]
 git-tree-sha1 = "34c0e9ad262e5f7fc75b10a9952ca7692cfc5fbe"
@@ -1773,6 +1822,23 @@ git-tree-sha1 = "e08a62abc517eb79667d0a29dc08a3b589516bb5"
 uuid = "171d559e-b47b-412a-8079-5efa626c420e"
 version = "0.1.15"
 
+[[deps.Static]]
+deps = ["IfElse"]
+git-tree-sha1 = "b366eb1eb68075745777d80861c6706c33f588ae"
+uuid = "aedffcd0-7271-4cad-89d0-dc628f76c6d3"
+version = "0.8.9"
+
+[[deps.StaticArrayInterface]]
+deps = ["ArrayInterface", "Compat", "IfElse", "LinearAlgebra", "PrecompileTools", "Requires", "SparseArrays", "Static", "SuiteSparse"]
+git-tree-sha1 = "5d66818a39bb04bf328e92bc933ec5b4ee88e436"
+uuid = "0d7ed370-da01-4f52-bd93-41d350b8b718"
+version = "1.5.0"
+weakdeps = ["OffsetArrays", "StaticArrays"]
+
+    [deps.StaticArrayInterface.extensions]
+    StaticArrayInterfaceOffsetArraysExt = "OffsetArrays"
+    StaticArrayInterfaceStaticArraysExt = "StaticArrays"
+
 [[deps.StaticArrays]]
 deps = ["LinearAlgebra", "Random", "StaticArraysCore"]
 git-tree-sha1 = "51621cca8651d9e334a659443a74ce50a3b6dfab"
@@ -1813,9 +1879,9 @@ version = "0.34.0"
 
 [[deps.StatsFuns]]
 deps = ["HypergeometricFunctions", "IrrationalConstants", "LogExpFunctions", "Reexport", "Rmath", "SpecialFunctions"]
-git-tree-sha1 = "f625d686d5a88bcd2b15cd81f18f98186fdc0c9a"
+git-tree-sha1 = "cef0472124fab0695b58ca35a77c6fb942fdab8a"
 uuid = "4c63d2b9-4356-54db-8cca-17b64c39e42c"
-version = "1.3.0"
+version = "1.3.1"
 weakdeps = ["ChainRulesCore", "InverseFunctions"]
 
     [deps.StatsFuns.extensions]

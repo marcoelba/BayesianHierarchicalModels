@@ -30,29 +30,6 @@ X = Random.rand(X_dist, (n, p))
 y = 1. .+ X * true_beta + sigma_y * Random.rand(Distributions.Normal(), n)
 
 
-@model function lin_model(y, X)
-    # Variance
-    sigma2_y ~ Turing.truncated(Normal(0, 2))
-    # beta (reg coefficients)
-    beta ~ Turing.MultivariateNormal(zeros(p), 1.)
-    beta0 ~ Turing.Normal(0., 1.)
-
-    mu = beta0 .+ X * beta
-
-    return y ~ MultivariateNormal(mu, sigma2_y)
-end
-
-sampler = NUTS()
-mc_samples = 300
-nchains = 4
-burn = 50
-
-model = lin_model(y, X)
-chains = sample(model, sampler, MCMCThreads(), mc_samples, nchains; discard_initial = burn)
-
-plot(chains[["beta[1]", "beta[2]", "beta[3]"]], legend=true)
-plot(chains[["beta[$(p)]", "beta[$(p-1)]", "beta[$(p-2)]"]], legend=true)
-
 
 # ---------------------------------
 # Using a Spike and Slab prior
@@ -103,15 +80,27 @@ model = ss_model(y, X)
 q = vi(model, advi)
 
 
-Turing.AdvancedVI.elbo(advi, q, model(y, X), 10000) 
-
 histogram(rand(q, 1_000)[1, :])
 histogram(rand(q, 1_000)[10, :])
 
 samples = rand(q, 10000)
 size(samples)
 
-histogram(rand(q, 1_000)[1, :])
 histogram(samples[11, :])
 histogram(samples[20, :])
 
+
+# Same inference via AdvancedVI library
+
+# Prior distribution
+function prior()
+    
+end
+prior(μ) = logpdf(MvNormal(ones(d)), μ)
+prior (generic function with 1 method)
+
+julia> likelihood(x, μ) = sum(logpdf(MvNormal(μ, ones(d)), x))
+likelihood (generic function with 1 method)
+
+julia> logπ(μ) = likelihood(observations, μ) + prior(μ)
+logπ (generic function with 1 method)
