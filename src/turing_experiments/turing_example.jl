@@ -7,21 +7,6 @@ using LinearAlgebra
 using DataFrames
 
 
-# Following Turing tutorial at https://turing.ml/v0.22/docs/using-turing/guide
-
-# define function using Turing syntax
-@model function gdemo(y)
-    # Variance
-    s² ~ InverseGamma(2, 3)
-    # Mean
-    m ~ Normal(0, sqrt(s²))
-
-    return y ~ Normal(m, sqrt(s²))
-end
-
-nuts_sample = sample(gdemo([2., 2., 2.45, 1.9, 1.95, 1.99, 2.1, 2.]), NUTS(0.65), 1000)
-
-
 " Example Linear Regression "
 n = 100
 p = 4
@@ -51,6 +36,7 @@ y = X * true_beta + sigma_y * Random.rand(Distributions.Normal(), n)
     return y ~ MultivariateNormal(mu, s2)
 end
 
+model1 = lin_model(y, X)
 nuts_lm = sample(lin_model(y, X), NUTS(0.65), 1000)
 
 nuts_chains = DataFrames.DataFrame(nuts_lm)
@@ -79,82 +65,139 @@ histogram!(samples[4, :])
 # Same inference via AdvancedVI library
 # -----------------------------------------
 using AdvancedVI
+using StatsFuns
 
 # Prior distribution
-function prior(beta)
-    Distributions.logpdf(Distributions.MultivariateNormal(ones(p)), beta)
-end
+prior_beta = Distributions.MultivariateNormal(ones(p))
+log_prior_beta(beta) = Distributions.logpdf(prior_beta, beta)
+
+prior_sigma_y = Distributions.truncated(Normal(0., 5.), 0., Inf)
+log_prior_sigma(sigma_y) = Distributions.logpdf(prior_sigma_y, sigma_y)
 
 # Likelihood
-function likelihood(y, X, beta)
-    sum(
-        Distributions.logpdf(Distributions.MultivariateNormal(X * beta, ones(n)), y)
-    )
-end
+likelihood(X, beta, sigma_y) = Distributions.MultivariateNormal(X * beta, ones(n) * sigma_y)
+log_likelihood(y, X, beta, sigma_y) = sum(Distributions.logpdf(likelihood(X, beta, sigma_y), y))
+likelihood(X, true_beta, 2.)
 
 # Joint
-function log_joint(beta)
-    likelihood(y, X, beta) + prior(beta)
+function log_joint(theta_hat)
+    beta = theta_hat[1:p]
+    sigma_y = StatsFuns.softplus(theta_hat[p+1])
+    log_likelihood(y, X, beta, sigma_y) + log_prior_beta(beta) + log_prior_sigma(sigma_y)
 end
-
-log_joint(true_beta)
+log_joint([1. ,0., 1., 0., -1.])
 
 # Variational Distribution
 # Provide a mapping from distribution parameters to the distribution θ ↦ q(⋅∣θ):
-using StatsFuns
 
 # Here MeanField approximation
 # theta is the parameter vector in the unconstrained space
+num_params = (p + 1) * 2
+half_num_params = Int(num_params / 2)
+
 function getq(theta)
-    Distributions.MultivariateNormal(theta[1:p], StatsFuns.softplus.(theta[p+1:p*2]))
+    Distributions.MultivariateNormal(
+        theta[1:half_num_params],
+        StatsFuns.softplus.(theta[half_num_params+1:half_num_params*2])
+    )
 end
 
-getq([1., 2., 0., -1., 1., 2., 0., -1.])
+getq([1., 2., 0., -1., 1., 2., 0., -1., 1., -1.])
 
 # Chose the VI algorithm
 advi = AdvancedVI.ADVI(10, 10_000)
 # vi(model, alg::ADVI, q, θ_init; optimizer = TruncatedADAGrad())
-q = vi(log_joint, advi, getq, randn(p*2))
+q = vi(log_joint, advi, getq, randn(num_params*2))
+
+# sigma hat
+StatsFuns.softplus(q.μ[p+1])
+# beta hat
+q.μ[1:p]
 
 # Check the ELBO
 AdvancedVI.elbo(advi, q, log_joint, 1000)
 
 
+# -------------------------------------------------------------------------
 # Define the mapping for a lower dimensional factored multivariate Normal
 using Bijectors
-
-# base distribution
-base_dist = Turing.DistributionsAD.TuringDiagMvNormal(zeros(p), ones(p))
-
 # bijector transfrom FROM the latent space TO the REAL line
 using AdvancedVI
 using StatsFuns
 using ComponentArrays, UnPack
 
-proto_arr = ComponentArrays.ComponentArray(; L=zeros(p, p), b=zeros(p))
+# base distribution
+base_dist = Distributions.MultivariateNormal(zeros(p), ones(p))
+
+# BIJECTORS taken from Turing model
+model = turing_model(y, X)
+
+# # Turing ADVI
+# advi = ADVI(10, 1000)
+# q = vi(model, advi)
+
+proto_arr = ComponentArrays.ComponentArray(; L=zeros(p, p), m=zeros(p))
 proto_axes = ComponentArrays.getaxes(proto_arr)
 num_params = length(proto_arr)
 
 
 function getq(theta)
-    L, b = begin
-        UnPack.@unpack L, b = ComponentArrays.ComponentArray(theta, proto_axes)
-        LinearAlgebra.LowerTriangular(L), b
+    L, m = begin
+        UnPack.@unpack L, m = ComponentArrays.ComponentArray(theta, proto_axes)
+        LinearAlgebra.LowerTriangular(L), m
     end
     # The diagonal of the covariance matrix must be positive
     D = Diagonal(diag(L))
-    Dplus = StatsFuns.softplus.(diag(L))
+    Dplus = Diagonal(StatsFuns.softplus.(diag(L)))
     A = L - D + Dplus
 
-
-
-    d = Int(length(theta) / 2)
-    A = @inbounds theta[1:d]
-    b = @inbounds theta[(d + 1):(2 * d)]
-
-    b = to_constrained ∘
-        Bijectors.Shift(b; dim=Val(1)) ∘
-        Bijectors.Scale(StatsFuns.softplus(A); dim=Val(1))
+    transformed_dist = m + A * base_dist
     
-        return Turing.transformed(base_dist, b)
+    return transformed_dist
 end
+
+theta = ones(num_params)
+getq(theta)
+
+advi = AdvancedVI.ADVI(10, 10_000)
+# vi(model, alg::ADVI, q, θ_init; optimizer = TruncatedADAGrad())
+q_full = vi(log_joint, advi, getq, randn(num_params))
+
+# check the covariance matrix
+Sigma_hat = q_full.Σ
+heatmap(Sigma_hat)
+
+
+# -------------------------------------------------
+# Lower dimensional Normal factorisation
+# -------------------------------------------------
+proto_arr = ComponentArrays.ComponentArray(; L=zeros(p, 2), d=zeros(p), m=zeros(p))
+proto_axes = ComponentArrays.getaxes(proto_arr)
+num_params = length(proto_arr)
+
+function getq(theta)
+    L, d, m = begin
+        UnPack.@unpack L, d, m = ComponentArrays.ComponentArray(theta, proto_axes)
+        L, d, m
+    end
+    # The diagonal of the covariance matrix must be positive
+    A = L * L'
+    Lo = LinearAlgebra.LowerTriangular(A)
+    D = Diagonal(StatsFuns.softplus.(d))
+    S = Lo + D
+
+    transformed_dist = m + S * base_dist
+    
+    return transformed_dist
+end
+
+theta = ones(num_params)
+getq(theta)
+
+advi = AdvancedVI.ADVI(10, 10_000)
+# vi(model, alg::ADVI, q, θ_init; optimizer = TruncatedADAGrad())
+q_full = vi(log_joint, advi, getq, randn(num_params))
+
+# check the covariance matrix
+Sigma_hat = q_full.Σ
+heatmap(Sigma_hat)
