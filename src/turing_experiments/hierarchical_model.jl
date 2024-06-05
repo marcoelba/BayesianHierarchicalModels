@@ -107,3 +107,102 @@ plot(nuts_lm[["beta_random[1,1]", "beta_random[1,2]", "beta_random[1,3]", "beta_
 # Intercept
 plot(nuts_lm[["beta0_overall", "beta0[1]" ,"beta0[2]", "beta0[5]"]])
 
+
+
+"""
+Using Variational Inference
+"""
+model = h_model(y, Xfix, Xrand)
+
+# ADVI
+advi = ADVI(10, 1000)
+q = vi(model, advi)
+
+samples = rand(q, 1000)
+size(samples)
+
+histogram(samples[1, :], label="sigma")
+histogram(samples[3, :], label="beta Overall 1")
+histogram!(samples[5, :], label="beta Overall 2")
+histogram!(samples[7, :], label="beta Overall 3")
+histogram!(samples[9, :], label="beta Overall 4")
+
+
+# Prior distributions
+
+# Variance
+prior_sigma_y = truncated(Normal(0., 1.), 0., Inf)
+log_prior_sigma_y(sigma_y) = Distributions.logpdf(prior_sigma_y, sigma_y)
+
+# Covariates
+prior_beta_overall = Distributions.MultivariateNormal(zeros(p), 5.)
+log_prior_beta_overall(beta_overall) = Distributions.logpdf(prior_beta_overall, beta_overall)
+
+function log_prior_beta_random(beta_overall, beta_random)
+    Distributions.logpdf(
+        Turing.filldist(
+            Distributions.MultivariateNormal(beta_overall, 1.), n_groups
+        ),
+        beta_random
+    )
+end
+
+# Intercept
+prior_beta0_overall = Distributions.Normal(0., 5.)
+log_prior_beta0_overall(beta0_overall) = Distributions.logpdf(prior_beta0_overall, beta0_overall)
+
+prior_sigma_beta0 = truncated(Normal(0., 1.), 0., Inf)
+log_prior_sigma_beta0(sigma_beta0) = Distributions.logpdf(prior_sigma_beta0, sigma_beta0)
+
+function log_prior_beta0(beta0_overall, sigma_beta0, beta0)
+    Distributions.logpdf(
+        Turing.filldist(Distributions.Normal(beta0_overall, sigma_beta0), n_groups),
+        beta0
+    )
+end
+
+# Likelihood
+function likelihood(Xrand, beta_random, beta0, sigma_y)
+    Turing.arraydist([
+        Distributions.MultivariateNormal(
+            beta0[gg] .+ Xrand[gg, :, :] * beta_random[:, gg],
+            ones(n_per_group) * sigma_y
+        ) for gg in range(1, n_groups)
+    ])
+end
+likelihood(Xrand, random_beta, random_intercept, 1.)
+
+log_likelihood(y, Xrand, beta_random, beta0, sigma_y) = sum(
+    Distributions.logpdf(likelihood(Xrand, beta_random, beta0, sigma_y), y)
+)
+log_likelihood(y, Xrand, random_beta, random_intercept, 1.)
+
+# Joint
+function log_joint(theta_hat)
+    beta = theta_hat[1:p]
+    sigma_y = StatsFuns.softplus(theta_hat[p+1])
+    log_likelihood(y, X, beta, sigma_y) + log_prior_beta(beta) + log_prior_sigma(sigma_y)
+end
+log_joint([1. ,0., 1., 0., -1.])
+
+# Variational Distribution
+# Provide a mapping from distribution parameters to the distribution θ ↦ q(⋅∣θ):
+
+# Here MeanField approximation
+# theta is the parameter vector in the unconstrained space
+num_params = (p + 1) * 2
+half_num_params = Int(num_params / 2)
+
+function getq(theta)
+    Distributions.MultivariateNormal(
+        theta[1:half_num_params],
+        StatsFuns.softplus.(theta[half_num_params+1:half_num_params*2])
+    )
+end
+
+getq([1., 2., 0., -1., 1., 2., 0., -1., 1., -1.])
+
+# Chose the VI algorithm
+advi = AdvancedVI.ADVI(10, 10_000)
+# vi(model, alg::ADVI, q, θ_init; optimizer = TruncatedADAGrad())
+q = vi(log_joint, advi, getq, randn(num_params*2))
