@@ -5,13 +5,17 @@ using StatsPlots
 using Random
 using LinearAlgebra
 using DataFrames
-using FillArrays
+using OrderedCollections
+
+using AdvancedVI
+using StatsFuns
+using Bijectors
+# bijector transfrom FROM the latent space TO the REAL line
+using ComponentArrays, UnPack
 
 include(joinpath("gaussian_spike_slab.jl"))
 include(joinpath("relaxed_bernoulli.jl"))
 
-
-Threads.nthreads()
 
 n = 100
 p = 10
@@ -38,10 +42,6 @@ y = 1. .+ X * true_beta + sigma_y * Random.rand(Distributions.Normal(), n)
     # sigma2_y ~ Turing.truncated(Normal(0, 2))
 
     # beta (reg coefficients)
-    # gamma_logit ~ LogitRelaxedBernoulli.(ones(p) * 0.5, 0.01)
-    # gamma = 1. ./ (1. .+ exp.(-gamma_logit))
-    # beta ~ GaussianSpikeSlab.(zeros(p), ones(p), gamma)
-
     relax_bern = LogitRelaxedBernoulli(0.01, 0.01)
     gamma_logit ~ Turing.filldist(relax_bern, p)
     gamma = 1. ./ (1. .+ exp.(-gamma_logit))
@@ -70,7 +70,6 @@ plot(chains[["gamma_logit[1]", "gamma_logit[10]"]], legend=true)
 
 # ADVI
 advi = ADVI(10, 1000)
-
 model = ss_model(y, X)
 
 q = vi(model, advi)
@@ -89,152 +88,74 @@ histogram(samples[20, :])
 # -----------------------------------------------
 # Same inference via AdvancedVI library
 # -----------------------------------------------
-using AdvancedVI
-using StatsFuns
-using Bijectors
-using AdvancedVI
-using StatsFuns
-using ComponentArrays, UnPack
 
-# Prior distribution
-# Gaussian
-prior = Distributions.MultivariateNormal(ones(p))
-log_prior(beta) = Distributions.logpdf(prior, beta)
+# Prior distributions
+# Intercept
+prior_beta0 = Normal(0., 5.)
+log_prior_beta0(beta0) = Distributions.logpdf(prior_beta0, beta0)
 
-# Likelihood
-likelihood(X, beta) = Distributions.MultivariateNormal(X * beta, ones(n))
-log_likelihood(y, X, beta) = sum(Distributions.logpdf(likelihood(X, beta), y))
-likelihood(X, true_beta)
+# beta Spike and Slab
+prior_gamma_logit = Turing.filldist(LogitRelaxedBernoulli(0.01, 0.01), p)
+log_prior_gamma_logit(gamma_logit) = Distributions.logpdf(prior_gamma_logit, gamma_logit)
 
-# Joint
-log_joint(beta) = log_likelihood(y, X, beta) + log_prior(beta)
-log_joint(true_beta)
-
-# Variational Distribution
-# Provide a mapping from distribution parameters to the distribution θ ↦ q(⋅∣θ):
-# bijector transfrom FROM the latent space TO the REAL line
-
-# base distribution
-base_dist = Distributions.MultivariateNormal(zeros(p), ones(p))
-
-proto_arr = ComponentArrays.ComponentArray(; L=zeros(p, 3), d=zeros(p), m=zeros(p))
-proto_axes = ComponentArrays.getaxes(proto_arr)
-num_params = length(proto_arr)
-
-function getq(theta)
-    L, d, m = begin
-        UnPack.@unpack L, d, m = ComponentArrays.ComponentArray(theta, proto_axes)
-        L, d, m
-    end
-    # The diagonal of the covariance matrix must be positive
-    A = L * L'
-    Lo = LinearAlgebra.LowerTriangular(A)
-    D = Diagonal(StatsFuns.softplus.(d))
-    S = Lo + D
-
-    transformed_dist = m + S * base_dist
-    
-    return transformed_dist
-end
-
-theta = ones(num_params)
-getq(theta)
-
-advi = AdvancedVI.ADVI(10, 10_000)
-# vi(model, alg::ADVI, q, θ_init; optimizer = TruncatedADAGrad())
-q_full = vi(log_joint, advi, getq, randn(num_params)*0.1)
-# Check the ELBO
-AdvancedVI.elbo(advi, q_full, log_joint, 1000)
-
-# check the covariance matrix
-Sigma_hat = q_full.Σ
-mu_hat = q_full.μ
-
-
-# --------------------------------------------
-# With Spike and Slab prior
-
-# Spike and Slab
-prior_relax_bern_logit = Turing.filldist(LogitRelaxedBernoulli(0.5, 0.01), p)
-log_prior_relax_bern_logit(bern_logit) = Distributions.logpdf(relax_bern_logit, bern_logit)
-
-
-function log_prior_beta(beta, gamma)
-    prior_beta = Turing.arraydist(
-        [GaussianSpikeSlab(0., 5., gg) for gg in gamma]
+function log_prior_beta(gamma, beta)
+    Distributions.logpdf(
+        Turing.arraydist([
+            GaussianSpikeSlab(0., 2., gg) for gg in gamma
+        ]),
+        beta
     )
-    Distributions.logpdf(prior_beta, beta)
 end
-log_prior_beta(true_beta, StatsFuns.softmax(ones(p)))
-
-prior_sigma_y = Distributions.truncated(Normal(0., 5.), 0., Inf)
-log_prior_sigma(sigma_y) = Distributions.logpdf(prior_sigma_y, sigma_y)
-
 
 # Likelihood
-likelihood(X, beta, sigma_y) = Distributions.MultivariateNormal(X * beta, ones(n) * sigma_y)
-log_likelihood(y, X, beta, sigma_y) = sum(Distributions.logpdf(likelihood(X, beta, sigma_y), y))
-likelihood(X, true_beta, 2.)
+function likelihood(X, beta, beta0)
+    Distributions.MultivariateNormal(
+        beta0 .+ X * beta, ones(n) * 1.
+    )
+end
+log_likelihood(y, X, beta, beta0) = sum(Distributions.logpdf(likelihood(X, beta, beta0), y))
+likelihood(X, true_beta, 0.)
+log_likelihood(y, X, true_beta, 0.)
 
 # Joint
-# tot number of parameters = p + p + 1
 function log_joint(theta_hat)
-    bern_logit = theta_hat[1:p]
-    beta = theta_hat[(p + 1):(2 * p)]
-    sigma_y = StatsFuns.softplus(theta_hat[p*2 + 1])
-    log_likelihood(y, X, beta, sigma_y) + log_prior_relax_bern_logit(bern_logit) + log_prior_beta(beta, StatsFuns.softmax(bern_logit)) + log_prior_sigma(sigma_y)
+    beta0 = theta_hat[1]
+    gamma_logit = theta_hat[2:(p+1)]
+    beta = theta_hat[(p+2):(p+p+1)]
+    
+    log_prior = log_prior_beta0(beta0) +
+        log_prior_gamma_logit(gamma_logit) +
+        log_prior_beta(StatsFuns.logistic.(gamma_logit), beta)
+
+    loglik = log_likelihood(y, X, beta, beta0)
+
+    loglik + log_prior
 end
-# try
+theta_hat = ones(p+p+1) * 2
 log_joint(ones(p+p+1))
 
 # Variational Distribution
 # Provide a mapping from distribution parameters to the distribution θ ↦ q(⋅∣θ):
 # bijector transfrom FROM the latent space TO the REAL line
 
-# MeanField -------------------------------
-num_params = (p + p + 1) * 2
-half_num_params = Int(num_params / 2)
+# Here MeanField approximation
+# theta is the parameter vector in the unconstrained space
+num_params = p+p+1
+num_weights = num_params * 2
+half_num_params = Int(num_weights / 2)
 
 function getq(theta)
     Distributions.MultivariateNormal(
         theta[1:half_num_params],
-        StatsFuns.softplus.(theta[half_num_params+1:half_num_params*2])
+        StatsFuns.softplus.(theta[half_num_params+1:num_weights])
     )
 end
 
+getq(ones(num_weights))
 
-# Factorised Normal -------------------------------
-# base distribution
-base_dist = Distributions.MultivariateNormal(zeros(p), ones(p))
-
-proto_arr = ComponentArrays.ComponentArray(; L=zeros(p, 3), d=zeros(p), m=zeros(p))
-proto_axes = ComponentArrays.getaxes(proto_arr)
-num_params = length(proto_arr)
-
-function getq(theta)
-    L, d, m = begin
-        UnPack.@unpack L, d, m = ComponentArrays.ComponentArray(theta, proto_axes)
-        L, d, m
-    end
-    # The diagonal of the covariance matrix must be positive
-    A = L * L'
-    Lo = LinearAlgebra.LowerTriangular(A)
-    D = Diagonal(StatsFuns.softplus.(d))
-    S = Lo + D
-
-    transformed_dist = m + S * base_dist
-    
-    return transformed_dist
-end
-
-theta = ones(num_params)
-getq(theta)
-
-
-# Inference
 advi = AdvancedVI.ADVI(10, 10_000)
 # vi(model, alg::ADVI, q, θ_init; optimizer = TruncatedADAGrad())
-q_full = vi(log_joint, advi, getq, randn(num_params)*0.1)
+q_full = vi(log_joint, advi, getq, randn(num_weights)*0.1)
 # Check the ELBO
 AdvancedVI.elbo(advi, q_full, log_joint, 1000)
 
@@ -242,4 +163,18 @@ AdvancedVI.elbo(advi, q_full, log_joint, 1000)
 Sigma_hat = q_full.Σ
 mu_hat = q_full.μ
 
+samples = rand(q_full, 1000)
+size(samples)
+
+histogram(samples[1, :], label="Intercept")
+
+histogram(samples[2, :], label="gamma 1")
+histogram!(samples[3, :], label="gamma 2")
+histogram!(samples[p, :], label="gamma 9")
+histogram!(samples[p+1, :], label="gamma 10")
+
 true_beta
+histogram(samples[2 + p, :], label="beta 1")
+histogram!(samples[3 + p, :], label="beta 2")
+histogram!(samples[p + p, :], label="beta 9")
+histogram!(samples[p+1 + p, :], label="beta 10")

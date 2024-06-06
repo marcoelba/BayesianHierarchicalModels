@@ -5,6 +5,7 @@ using StatsPlots
 using Random
 using LinearAlgebra
 using DataFrames
+using OrderedCollections
 
 using AdvancedVI
 using StatsFuns
@@ -129,15 +130,24 @@ histogram!(samples[9, :], label="beta Overall 4")
 
 
 # Prior distributions
+params_dict = OrderedDict()
+num_params = 0
 
 # Variance
+params_dict["sigma_y"] = OrderedDict("size" => (1), "from" => 1, "to" => 1, "bij" => StatsFuns.softplus)
+num_params += 1
 prior_sigma_y = truncated(Normal(0., 1.), 0., Inf)
 log_prior_sigma_y(sigma_y) = Distributions.logpdf(prior_sigma_y, sigma_y)
 
-# Covariates
+# Fixed effects
+params_dict["beta_overall"] = OrderedDict("size" => (p), "from" => num_params+1, "to" => num_params + p, "bij" => identity)
+num_params += p
 prior_beta_overall = Distributions.MultivariateNormal(zeros(p), 5.)
 log_prior_beta_overall(beta_overall) = Distributions.logpdf(prior_beta_overall, beta_overall)
 
+# Random effects
+params_dict["beta_random"] = OrderedDict("size" => (p, n_groups), "from" => num_params+1, "to" => num_params + p*n_groups, "bij" => identity)
+num_params += p*n_groups
 function log_prior_beta_random(beta_overall, beta_random)
     Distributions.logpdf(
         Turing.filldist(
@@ -148,12 +158,19 @@ function log_prior_beta_random(beta_overall, beta_random)
 end
 
 # Intercept
+params_dict["beta0_overall"] = OrderedDict("size" => (1), "from" => num_params+1, "to" => num_params + 1, "bij" => identity)
+num_params += 1
 prior_beta0_overall = Distributions.Normal(0., 5.)
 log_prior_beta0_overall(beta0_overall) = Distributions.logpdf(prior_beta0_overall, beta0_overall)
 
+params_dict["sigma_beta0"] = OrderedDict("size" => (1), "from" => num_params+1, "to" => num_params + 1, "bij" => StatsFuns.softplus)
+num_params += 1
 prior_sigma_beta0 = truncated(Normal(0., 1.), 0., Inf)
 log_prior_sigma_beta0(sigma_beta0) = Distributions.logpdf(prior_sigma_beta0, sigma_beta0)
 
+# Random Intercept
+params_dict["beta0"] = OrderedDict("size" => (n_groups), "from" => num_params+1, "to" => num_params + n_groups, "bij" => identity)
+num_params += n_groups
 function log_prior_beta0(beta0_overall, sigma_beta0, beta0)
     Distributions.logpdf(
         Turing.filldist(Distributions.Normal(beta0_overall, sigma_beta0), n_groups),
@@ -166,32 +183,63 @@ function likelihood(Xrand, beta_random, beta0, sigma_y)
     Turing.arraydist([
         Distributions.MultivariateNormal(
             beta0[gg] .+ Xrand[gg, :, :] * beta_random[:, gg],
-            ones(n_per_group) * sigma_y
+            ones(n_per_group) .* sigma_y
         ) for gg in range(1, n_groups)
     ])
 end
-likelihood(Xrand, random_beta, random_intercept, 1.)
+likelihood(Xrand, random_beta', random_intercept, 1.)
 
 log_likelihood(y, Xrand, beta_random, beta0, sigma_y) = sum(
     Distributions.logpdf(likelihood(Xrand, beta_random, beta0, sigma_y), y)
 )
-log_likelihood(y, Xrand, random_beta, random_intercept, 1.)
+log_likelihood(y', Xrand, random_beta', random_intercept, 1.)
+
+# ddd = Turing.arraydist([MultivariateNormal(ones(5) * mm, 1.) for mm in [0., 1., 2.]])
+# Distributions.logpdf(ddd, ones(5, 3))
+
+# Distributions.logpdf(MultivariateNormal(ones(5) * 0., 1.), ones(5)) +
+# Distributions.logpdf(MultivariateNormal(ones(5) * 1., 1.), ones(5)) +
+# Distributions.logpdf(MultivariateNormal(ones(5) * 2., 1.), ones(5))
 
 # Joint
+
 function log_joint(theta_hat)
-    beta = theta_hat[1:p]
-    sigma_y = StatsFuns.softplus(theta_hat[p+1])
-    log_likelihood(y, X, beta, sigma_y) + log_prior_beta(beta) + log_prior_sigma(sigma_y)
+    sigma_y = reshape(
+        params_dict["sigma_y"]["bij"].(theta_hat[params_dict["sigma_y"]["from"]:params_dict["sigma_y"]["to"]]),
+        params_dict["sigma_y"]["size"]
+    )
+    beta_overall = reshape(
+        params_dict["beta_overall"]["bij"](theta_hat[params_dict["beta_overall"]["from"]:params_dict["beta_overall"]["to"]]),
+        params_dict["beta_overall"]["size"]
+    )
+    beta_random = reshape(
+        params_dict["beta_random"]["bij"](theta_hat[params_dict["beta_random"]["from"]:params_dict["beta_random"]["to"]]),
+        params_dict["beta_random"]["size"]
+    )
+    beta0_overall = params_dict["beta0_overall"]["bij"](theta_hat[params_dict["beta0_overall"]["from"]:params_dict["beta0_overall"]["to"]])
+    sigma_beta0 = params_dict["sigma_beta0"]["bij"].(theta_hat[params_dict["sigma_beta0"]["from"]:params_dict["sigma_beta0"]["to"]])
+    beta0 = params_dict["beta0"]["bij"](theta_hat[params_dict["beta0"]["from"]:params_dict["beta0"]["to"]])
+
+    loglik = log_likelihood(y', Xrand, beta_random, beta0, sigma_y)
+    log_prior = log_prior_sigma_y(sigma_y[1]) +
+        log_prior_beta_overall(beta_overall) +
+        log_prior_beta_random(beta_overall, beta_random) + 
+        log_prior_beta0_overall(beta0_overall[1]) +
+        log_prior_sigma_beta0(sigma_beta0[1]) +
+        log_prior_beta0(beta0_overall[1], sigma_beta0[1], beta0)
+    
+    loglik + log_prior
 end
-log_joint([1. ,0., 1., 0., -1.])
+theta_hat = ones(num_params)
+log_joint(ones(num_params))
 
 # Variational Distribution
 # Provide a mapping from distribution parameters to the distribution θ ↦ q(⋅∣θ):
 
 # Here MeanField approximation
 # theta is the parameter vector in the unconstrained space
-num_params = (p + 1) * 2
-half_num_params = Int(num_params / 2)
+num_weights = num_params * 2
+half_num_params = Int(num_weights / 2)
 
 function getq(theta)
     Distributions.MultivariateNormal(
@@ -200,9 +248,32 @@ function getq(theta)
     )
 end
 
-getq([1., 2., 0., -1., 1., 2., 0., -1., 1., -1.])
+getq(ones(num_weights))
 
 # Chose the VI algorithm
 advi = AdvancedVI.ADVI(10, 10_000)
 # vi(model, alg::ADVI, q, θ_init; optimizer = TruncatedADAGrad())
-q = vi(log_joint, advi, getq, randn(num_params*2))
+q = vi(log_joint, advi, getq, randn(num_weights))
+
+samples = rand(q, 1000)
+size(samples)
+
+params_dict
+overall_beta
+
+histogram(params_dict["sigma_y"]["bij"].(samples[1, :]), label="sigma")
+
+histogram(samples[2, :], label="beta Overall 1")
+histogram!(samples[3, :], label="beta Overall 2")
+histogram!(samples[4, :], label="beta Overall 3")
+histogram!(samples[5, :], label="beta Overall 4")
+
+histogram(samples[46, :], label="beta 0 Overall")
+
+histogram(params_dict["sigma_beta0"]["bij"].(samples[47, :]), label="beta Overall 1")
+
+random_intercept
+histogram(samples[48, :], label="beta 0 1")
+histogram!(samples[49, :], label="beta 0 2")
+histogram!(samples[50, :], label="beta 0 3")
+
