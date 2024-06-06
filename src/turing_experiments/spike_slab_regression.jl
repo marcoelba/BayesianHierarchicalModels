@@ -170,26 +170,46 @@ num_params = p+p+2
 num_weights = num_params * 2
 half_num_params = Int(num_weights / 2)
 
+prior_gamma_logit = Turing.filldist(LogitRelaxedBernoulli(0.5, 0.01), p)
+log_prior_gamma_logit(gamma_logit) = Distributions.logpdf(prior_gamma_logit, gamma_logit)
+
+function log_prior_beta(gamma, beta)
+    Distributions.logpdf(
+        Turing.arraydist([
+            GaussianSpikeSlab(0., 2., gg) for gg in gamma
+        ]),
+        beta
+    )
+end
+
+
 function getq(theta)
     d = length(theta) ÷ 2
+    
+    q_sigma_y = [Normal(theta[1], theta[2])]
+    q_beta0 = [Normal(theta[3], theta[4])]
+
+    gamma_logit = theta[5:(p+5)]
+    q_gamma_logit = [LogitRelaxedBernoulli(gamma_logit, 0.01) for jj in range(1, p)]
+    
+    mu_beta = theta[(p+6):(p+6+p)]
+    sigma_beta = theta[(p+7+p):(p+7+p+p)]
+    q_beta = [GaussianSpikeSlab(0., 2., StatsFuns.logistic(gg)) for gg in gamma_logit]
+
 
     mu_vec = @inbounds theta[1:d]
     sigma_vec = @inbounds theta[(d + 1):(2 * d)]
-
     Turing.arraydist([
         Normal(mu, StatsFuns.softplus(sigma)) for (mu, sigma) in zip(mu_vec, sigma_vec)
     ])
 end
+
 
 advi = AdvancedVI.ADVI(10, 10_000)
 # vi(model, alg::ADVI, q, θ_init; optimizer = TruncatedADAGrad())
 q_full = vi(log_joint, advi, getq, randn(num_weights)*0.1)
 # Check the ELBO
 AdvancedVI.elbo(advi, q_full, log_joint, 1000)
-
-# check the covariance matrix
-Sigma_hat = q_full.Σ
-mu_hat = q_full.μ
 
 samples = rand(q_full, 1000)
 size(samples)
