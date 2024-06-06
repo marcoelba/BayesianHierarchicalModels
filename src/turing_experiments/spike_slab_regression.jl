@@ -39,7 +39,9 @@ y = 1. .+ X * true_beta + sigma_y * Random.rand(Distributions.Normal(), n)
 # ---------------------------------
 @model function ss_model(y, X)
     # Variance
-    # sigma2_y ~ Turing.truncated(Normal(0, 2))
+    sigma2_y ~ Turing.truncated(Normal(0, 2))
+
+    beta0 ~ Turing.Normal(0., 5.)
 
     # beta (reg coefficients)
     relax_bern = LogitRelaxedBernoulli(0.01, 0.01)
@@ -48,11 +50,9 @@ y = 1. .+ X * true_beta + sigma_y * Random.rand(Distributions.Normal(), n)
 
     beta ~ Turing.arraydist([GaussianSpikeSlab(0., 5., gg) for gg in gamma])
 
-    beta0 ~ Turing.Normal(0., 5.)
-
     mu = beta0 .+ X * beta
 
-    return y ~ MultivariateNormal(mu, 1.)
+    return y ~ MultivariateNormal(mu, sigma2_y)
 end
 
 sampler = NUTS()
@@ -74,15 +74,21 @@ model = ss_model(y, X)
 
 q = vi(model, advi)
 
-
-histogram(rand(q, 1_000)[1, :])
-histogram(rand(q, 1_000)[10, :])
-
 samples = rand(q, 10000)
 size(samples)
 
-histogram(samples[11, :])
-histogram(samples[20, :])
+histogram(StatsFuns.softplus.(samples[1, :]))
+histogram(samples[2, :])
+
+histogram(samples[3, :])
+histogram!(samples[4, :])
+histogram!(samples[11, :])
+histogram!(samples[12, :])
+
+histogram(samples[3 + p, :])
+histogram!(samples[4 + p, :])
+histogram!(samples[11 + p, :])
+histogram!(samples[12 + p, :])
 
 
 # -----------------------------------------------
@@ -90,12 +96,15 @@ histogram(samples[20, :])
 # -----------------------------------------------
 
 # Prior distributions
+prior_sigma_y = truncated(Normal(0., 1.), 0., Inf)
+log_prior_sigma_y(sigma_y) = Distributions.logpdf(prior_sigma_y, sigma_y)
+
 # Intercept
 prior_beta0 = Normal(0., 5.)
 log_prior_beta0(beta0) = Distributions.logpdf(prior_beta0, beta0)
 
 # beta Spike and Slab
-prior_gamma_logit = Turing.filldist(LogitRelaxedBernoulli(0.01, 0.01), p)
+prior_gamma_logit = Turing.filldist(LogitRelaxedBernoulli(0.5, 0.01), p)
 log_prior_gamma_logit(gamma_logit) = Distributions.logpdf(prior_gamma_logit, gamma_logit)
 
 function log_prior_beta(gamma, beta)
@@ -108,31 +117,33 @@ function log_prior_beta(gamma, beta)
 end
 
 # Likelihood
-function likelihood(X, beta, beta0)
+function likelihood(X, beta, beta0, sigma_y)
     Distributions.MultivariateNormal(
-        beta0 .+ X * beta, ones(n) * 1.
+        beta0 .+ X * beta, ones(n) * sigma_y
     )
 end
-log_likelihood(y, X, beta, beta0) = sum(Distributions.logpdf(likelihood(X, beta, beta0), y))
-likelihood(X, true_beta, 0.)
-log_likelihood(y, X, true_beta, 0.)
+log_likelihood(y, X, beta, beta0, sigma_y) = sum(Distributions.logpdf(likelihood(X, beta, beta0, sigma_y), y))
+likelihood(X, true_beta, 0., 1.)
+log_likelihood(y, X, true_beta, 0., 1.)
 
 # Joint
 function log_joint(theta_hat)
-    beta0 = theta_hat[1]
-    gamma_logit = theta_hat[2:(p+1)]
-    beta = theta_hat[(p+2):(p+p+1)]
+    sigma_y = StatsFuns.softplus(theta_hat[1])
+    beta0 = theta_hat[2]
+    gamma_logit = theta_hat[3:(p+2)]
+    beta = theta_hat[(p+3):(p+p+2)]
     
     log_prior = log_prior_beta0(beta0) +
+        log_prior_sigma_y(sigma_y) +
         log_prior_gamma_logit(gamma_logit) +
         log_prior_beta(StatsFuns.logistic.(gamma_logit), beta)
 
-    loglik = log_likelihood(y, X, beta, beta0)
+    loglik = log_likelihood(y, X, beta, beta0, sigma_y)
 
     loglik + log_prior
 end
-theta_hat = ones(p+p+1) * 2
-log_joint(ones(p+p+1))
+theta_hat = ones(p+p+2) * 2
+log_joint(theta_hat)
 
 # Variational Distribution
 # Provide a mapping from distribution parameters to the distribution θ ↦ q(⋅∣θ):
@@ -140,7 +151,7 @@ log_joint(ones(p+p+1))
 
 # Here MeanField approximation
 # theta is the parameter vector in the unconstrained space
-num_params = p+p+1
+num_params = p+p+2
 num_weights = num_params * 2
 half_num_params = Int(num_weights / 2)
 
@@ -152,6 +163,23 @@ function getq(theta)
 end
 
 getq(ones(num_weights))
+
+
+# Variational Spike and Slab
+num_params = p+p+2
+num_weights = num_params * 2
+half_num_params = Int(num_weights / 2)
+
+function getq(theta)
+    d = length(theta) ÷ 2
+
+    mu_vec = @inbounds theta[1:d]
+    sigma_vec = @inbounds theta[(d + 1):(2 * d)]
+
+    Turing.arraydist([
+        Normal(mu, StatsFuns.softplus(sigma)) for (mu, sigma) in zip(mu_vec, sigma_vec)
+    ])
+end
 
 advi = AdvancedVI.ADVI(10, 10_000)
 # vi(model, alg::ADVI, q, θ_init; optimizer = TruncatedADAGrad())
@@ -166,15 +194,18 @@ mu_hat = q_full.μ
 samples = rand(q_full, 1000)
 size(samples)
 
-histogram(samples[1, :], label="Intercept")
+histogram(StatsFuns.softplus.(samples[1, :]), label="sigma y")
 
-histogram(samples[2, :], label="gamma 1")
-histogram!(samples[3, :], label="gamma 2")
-histogram!(samples[p, :], label="gamma 9")
-histogram!(samples[p+1, :], label="gamma 10")
+histogram(samples[2, :], label="Intercept")
+
+histogram(samples[3, :], label="gamma 1")
+histogram!(samples[4, :], label="gamma 2")
+histogram!(samples[p+1, :], label="gamma 9")
+histogram!(samples[p+2, :], label="gamma 10")
 
 true_beta
-histogram(samples[2 + p, :], label="beta 1")
-histogram!(samples[3 + p, :], label="beta 2")
-histogram!(samples[p + p, :], label="beta 9")
-histogram!(samples[p+1 + p, :], label="beta 10")
+histogram(samples[3 + p, :], label="beta 1")
+histogram!(samples[4 + p, :], label="beta 2")
+histogram!(samples[p+1 + p, :], label="beta 9")
+histogram!(samples[p+2 + p, :], label="beta 10")
+
