@@ -24,10 +24,6 @@ GaussianSpikeSlab(mu, sigma) = GaussianSpikeSlab(mu, sigma, 1., Distributions.No
 
 Distributions.rand(rng::Distributions.AbstractRNG, d::GaussianSpikeSlab) = Distributions.rand(d.slab)
 
-function gaussian_spike_slab_logpdf(x, slab_dist)
-    log(slab_dist.gamma * exp(Distributions.logpdf(slab_dist, x)) + (1f0 - slab_dist.gamma) + EPS)
-end
-
 Distributions.logpdf(
     d::GaussianSpikeSlab,
     x::Real

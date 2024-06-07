@@ -2,7 +2,7 @@ import Distributions
 import Turing
 
 
-EPS = 1e-16
+EPS = 1e-8
 
 
 struct LogitRelaxedBernoulli{P<:Real, L<:Real, T<:Real} <: Distributions.ContinuousUnivariateDistribution
@@ -23,7 +23,7 @@ function relaxed_bernoulli_sample(prob::Real, temp::Real)
     return logit
 end
 
-Distributions.rand(rng::Distributions.AbstractRNG, d::LogitRelaxedBernoulli) = relaxed_bernoulli_sample(d.prob, d.temp)
+Distributions.rand(d::LogitRelaxedBernoulli) = relaxed_bernoulli_sample(d.prob, d.temp)
 
 function relaxed_bernoulli_logpdf(x, logit, temp)
     diff = logit - x * temp
@@ -46,10 +46,14 @@ Distributions.maximum(d::LogitRelaxedBernoulli) = +Inf
 # sam = Distributions.rand.(x)
 # Distributions.logpdf.(x, sam)
 
-# probs = 0.6
+# probs = 0.3
 # logits = log.(probs ./ (1 .- probs))
 # temp = 0.1
 # x = LogitRelaxedBernoulli(probs, temp)
+
+# Distributions.logpdf(x, -10.)
+
+# Turing.mean([Distributions.rand(x) for j in range(1, 10000)])
 
 # sam = Distributions.rand(x)
 # Distributions.logpdf(x, sam)
