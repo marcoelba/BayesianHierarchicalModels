@@ -105,23 +105,39 @@ log_prior_sigma_y(sigma_y) = Distributions.logpdf(prior_sigma_y, sigma_y)
 prior_beta0 = Normal(0., 5.)
 log_prior_beta0(beta0) = Distributions.logpdf(prior_beta0, beta0)
 
-# beta Spike and Slab
+# prob Spike and Slab
 prior_gamma_logit = Turing.filldist(LogitRelaxedBernoulli(0.5, 0.01), p)
 log_prior_gamma_logit(gamma_logit) = Distributions.logpdf(prior_gamma_logit, gamma_logit)
 
 # prior sigma beta Slab
-prior_sigma_beta = truncated(Normal(0., 1.), 0., Inf)
+prior_sigma_beta = truncated(Normal(0., 0.05), 0., Inf)
 log_prior_sigma_beta(sigma_beta) = Distributions.logpdf(prior_sigma_beta, sigma_beta)
 
 # prior beta
+
+# SS
+# function log_prior_beta(gamma, sigma_beta, beta)
+#     Distributions.logpdf(
+#         Turing.arraydist([
+#             GaussianSpikeSlab(0., sigma_beta, gg) for gg in gamma
+#         ]),
+#         beta
+#     )
+# end
+
+# Continuous Mixture
 function log_prior_beta(gamma, sigma_beta, beta)
     Distributions.logpdf(
         Turing.arraydist([
-            GaussianSpikeSlab(0., sigma_beta, gg) for gg in gamma
+            Distributions.MixtureModel(Normal[
+                Normal(0., 10. * sigma_beta),
+                Normal(0., sigma_beta)
+            ], [gg, 1. - gg]) for gg in gamma
         ]),
         beta
     )
 end
+log_prior_beta([0.01, 0.9], 0.1, [0.1, 1.])
 
 # Likelihood
 function likelihood(X, beta, beta0, sigma_y)
@@ -145,13 +161,14 @@ function log_joint(theta_hat)
     log_prior = log_prior_beta0(beta0) +
         log_prior_sigma_y(sigma_y) +
         log_prior_gamma_logit(gamma_logit) +
+        log_prior_sigma_beta(sigma_beta) +
         log_prior_beta(StatsFuns.logistic.(gamma_logit), sigma_beta, beta)
 
     loglik = log_likelihood(y, X, beta, beta0, sigma_y)
 
     loglik + log_prior
 end
-theta_hat = ones(p+p+3) * -2
+theta_hat = ones(p+p+3)
 log_joint(theta_hat)
 
 # Variational Distribution
@@ -197,7 +214,7 @@ function getq(theta)
 
     mu_beta = theta[(p+5+p):(p+4+p+p)]
     sigma_beta = theta[(p+5+p+p):(p+4+p+p+p)]
-    q_beta = [Normal(mu, StatsFuns.softplus(sigma)) *  for (mu, sigma) in zip(mu_beta, sigma_beta)]
+    # q_beta = [Normal(mu, StatsFuns.softplus(sigma)) *  for (mu, sigma) in zip(mu_beta, sigma_beta)]
 
     Turing.arraydist(vcat(q_sigma_y, q_beta0, q_gamma_logit, q_beta))
 end

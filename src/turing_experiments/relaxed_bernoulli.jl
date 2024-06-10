@@ -2,7 +2,7 @@ import Distributions
 import Turing
 
 
-EPS = 1e-8
+EPS = 1e-16
 
 
 struct LogitRelaxedBernoulli{P<:Real, L<:Real, T<:Real} <: Distributions.ContinuousUnivariateDistribution
