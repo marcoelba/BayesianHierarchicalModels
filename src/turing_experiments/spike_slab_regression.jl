@@ -44,14 +44,19 @@ y = 1. .+ X * true_beta + sigma_y * Random.rand(Distributions.Normal(), n)
     beta0 ~ Turing.Normal(0., 5.)
 
     # beta (reg coefficients)
-    relax_bern = LogitRelaxedBernoulli(0.01, 0.01)
-    gamma_logit ~ Turing.filldist(relax_bern, p)
+    gamma_logit ~ Turing.filldist(LogitRelaxedBernoulli(0.01, 0.01), p)
     gamma = 1. ./ (1. .+ exp.(-gamma_logit))
 
     s_beta ~ Turing.truncated(Normal(0, 2), 0., Inf64)
 
     beta ~ Turing.arraydist([GaussianSpikeSlab(0., s_beta, gg) for gg in gamma])
 
+    Turing.arraydist([
+        Distributions.MixtureModel(Normal[
+            Normal(0., 10. * sigma_beta),
+            Normal(0., sigma_beta)
+        ], [gg, 1. - gg]) for gg in gamma
+    ])
     mu = beta0 .+ X * beta
 
     return y ~ MultivariateNormal(mu, sigma2_y)

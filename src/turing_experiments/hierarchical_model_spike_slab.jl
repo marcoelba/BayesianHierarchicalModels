@@ -1,4 +1,4 @@
-# Hierarchical Model
+# Hierarchical Model with Spike and Slab prior
 using Turing
 using Distributions
 using StatsPlots
@@ -13,17 +13,20 @@ using Bijectors
 # bijector transfrom FROM the latent space TO the REAL line
 using ComponentArrays, UnPack
 
+include(joinpath("gaussian_spike_slab.jl"))
+include(joinpath("relaxed_bernoulli.jl"))
+
 
 # Generate hierarchical model data
 # groups are the individuals (patients)
-n_individuals = 100
+n_individuals = 200
 n_per_ind = 10
 
 n_total = n_individuals * n_per_ind
 
 # tot covariates
-p = 5
-prop_non_zero = 0.6
+p = 50
+prop_non_zero = 0.1
 p1 = Int(p * prop_non_zero)
 p0 = p - p1
 
@@ -86,14 +89,7 @@ for tt in range(1, n_per_ind)
     y[:, tt] += Random.randn(n_individuals) * 1.
 end
 
-cor(y, dims=1)
-cor(y, dims=2)
 
-mean(cor(y, dims=2), dims=1)
-mean(cor(y, dims=1), dims=1)
-
-
-# define function using Turing syntax
 @model function longitudinal_model(y, Xfix, Xrand)
     # Variance
     sigma_y ~ truncated(Normal(0., 1.), 0., Inf)
@@ -111,8 +107,20 @@ mean(cor(y, dims=1), dims=1)
     beta_time ~ Turing.filldist(Turing.Normal(0., sigma_beta_time), n_per_ind)
     # beta_time ~ Turing.Normal(0., 2.)
 
-    # Covariates
-    beta_fixed ~ Turing.MultivariateNormal(zeros(p), 5.)
+    # Covariates Fixed Effects
+    gamma_logit ~ Turing.filldist(LogitRelaxedBernoulli(0.1, 0.01), p)
+    gamma = StatsFuns.logistic.(gamma_logit)
+
+    sigma_beta_slab ~ Turing.truncated(Normal(0., 2.), 0., Inf64)
+
+    # beta_fixed ~ Turing.arraydist([GaussianSpikeSlab(0., sigma_beta_slab, gg) for gg in gamma])
+
+    beta_fixed ~ Turing.arraydist([
+        Distributions.MixtureModel(Normal[
+            Normal(0., 10. * sigma_beta_slab),
+            Normal(0., sigma_beta_slab)
+        ], [gg, 1. - gg]) for gg in gamma
+    ])
 
     # sigma_beta ~ truncated(Normal(0., 5.), 0., Inf)
 
@@ -139,37 +147,7 @@ end
 
 
 model = longitudinal_model(y, Xfix, Xrand)
-nuts_lm = sample(model, NUTS(0.65), 2000)
-
-# Overall Beta
-plot(nuts_lm[[
-    "beta_fixed[1]",
-    "beta_fixed[2]",
-    "beta_fixed[3]",
-    "beta_fixed[4]",
-    "beta_fixed[5]"
-]])
-overall_beta
-
-plot(nuts_lm[["sigma_y"]])
-plot(nuts_lm[["sigma_beta"]])
-plot(nuts_lm[["sigma_beta0"]])
-plot(nuts_lm[["sigma_beta_time"]])
-
-plot(nuts_lm[["beta0_fixed"]])
-
-# Intercept
-nuts_lm[["beta0_random[1]" ,"beta0_random[2]", "beta0_random[3]", "beta0_random[4]", "beta0_random[5]"]]
-
-plot(nuts_lm[[
-    "beta_time[1]",
-    "beta_time[2]",
-    "beta_time[3]",
-    "beta_time[4]",
-    "beta_time[5]"
-]])
-random_time_effect
-
+nuts_lm = sample(model, NUTS(0.65), 1000)
 
 
 """
@@ -178,23 +156,15 @@ Using Variational Inference
 model = longitudinal_model(y, Xfix, Xrand)
 
 # ADVI
-advi = ADVI(5, 5000)
+advi = ADVI(5, 1000)
 q = vi(model, advi)
 
 samples = rand(q, 1000)
 size(samples)
 tot_params = size(samples)[1]
 
-histogram(samples[1, :], label="sigma")
 
-overall_beta
-histogram(samples[tot_params-p+1, :], label="beta Overall 1")
-histogram!(samples[tot_params-p+2, :], label="beta Overall 2")
-
-histogram(samples[tot_params-2, :], label="beta Overall 4")
-histogram!(samples[tot_params-1, :], label="beta Overall 5")
-histogram!(samples[tot_params, :], label="beta Overall 6")
-
+# <<<<<<<< Custom made model >>>>>>>>>>>
 
 # Prior distributions
 params_dict = OrderedDict()
@@ -213,16 +183,16 @@ prior_beta_fixed = Distributions.MultivariateNormal(zeros(p), 5.)
 log_prior_beta_fixed(beta_fixed) = Distributions.logpdf(prior_beta_fixed, beta_fixed)
 
 # Random effects
-params_dict["beta_random"] = OrderedDict("size" => (p, n_groups), "from" => num_params+1, "to" => num_params + p*n_groups, "bij" => identity)
-num_params += p*n_groups
-function log_prior_beta_random(beta_overall, beta_random)
-    Distributions.logpdf(
-        Turing.filldist(
-            Distributions.MultivariateNormal(beta_overall, 1.), n_groups
-        ),
-        beta_random
-    )
-end
+# params_dict["beta_random"] = OrderedDict("size" => (p, n_groups), "from" => num_params+1, "to" => num_params + p*n_groups, "bij" => identity)
+# num_params += p*n_groups
+# function log_prior_beta_random(beta_overall, beta_random)
+#     Distributions.logpdf(
+#         Turing.filldist(
+#             Distributions.MultivariateNormal(beta_overall, 1.), n_groups
+#         ),
+#         beta_random
+#     )
+# end
 
 # Intercept
 params_dict["beta0_fixed"] = OrderedDict("size" => (1), "from" => num_params+1, "to" => num_params + 1, "bij" => identity)
@@ -245,59 +215,117 @@ function log_prior_beta0_random(beta0_fixed, sigma_beta0, beta0_random)
     )
 end
 
+# Random time component
+params_dict["sigma_beta_time"] = OrderedDict("size" => (1), "from" => num_params+1, "to" => num_params + 1, "bij" => StatsFuns.softplus)
+num_params += 1
+prior_sigma_beta_time = truncated(Normal(0., 1.), 0., Inf)
+log_prior_sigma_beta_time(sigma_beta_time) = Distributions.logpdf(prior_sigma_beta_time, sigma_beta_time)
+
+params_dict["beta_time"] = OrderedDict("size" => (n_per_ind), "from" => num_params+1, "to" => num_params + n_per_ind, "bij" => identity)
+num_params += n_per_ind
+function log_prior_beta_time(sigma_beta_time, beta_time)
+    Distributions.logpdf(
+        Turing.filldist(Distributions.Normal(0., sigma_beta_time), n_per_ind),
+        beta_time
+    )
+end
+
 # Likelihood
-function likelihood(;beta0_random, beta_fixed, sigma_y, Xfix, beta_random=NaN, Xrand=NaN)
+function likelihood(;beta0_fixed, beta0_random, beta_fixed, beta_time, sigma_y, Xfix, beta_random=NaN, Xrand=NaN)
     Turing.arraydist([
         Distributions.MultivariateNormal(
-            beta0_random .+ Xfix * beta_fixed,
+            beta0_fixed .+ beta0_random .+ Xfix * beta_fixed .+ beta_time[tt],
             ones(n_individuals) .* sigma_y
         ) for tt in range(1, n_per_ind)
     ])
 end
-likelihood(beta0_random=randn(n_individuals), beta_fixed=overall_beta, sigma_y=1., Xfix=Xfix)
-
-log_likelihood(;y, beta0_random, beta_fixed, sigma_y, Xfix, beta_random=NaN, Xrand=NaN) = sum(
-    Distributions.logpdf(likelihood(
-        beta0_random=beta0_random, beta_fixed=beta_fixed, sigma_y=sigma_y, Xfix=Xfix), y)
+likelihood(
+    beta0_fixed=overall_intercept,
+    beta0_random=randn(n_individuals),
+    beta_fixed=overall_beta,
+    beta_time=random_time_effect,
+    sigma_y=1.,
+    Xfix=Xfix
 )
-log_likelihood(y=y, beta0_random=randn(n_individuals), beta_fixed=overall_beta, sigma_y=1., Xfix=Xfix)
+
+log_likelihood(;y, beta0_fixed, beta0_random, beta_fixed, beta_time, sigma_y, Xfix, beta_random=NaN, Xrand=NaN) = sum(
+    Distributions.logpdf(likelihood(
+        beta0_fixed=beta0_fixed,
+        beta0_random=beta0_random,
+        beta_fixed=beta_fixed,
+        beta_time=beta_time,
+        sigma_y=sigma_y,
+        Xfix=Xfix
+    ), y)
+)
+log_likelihood(
+    y=y,
+    beta0_fixed=overall_intercept,
+    beta0_random=randn(n_individuals),
+    beta_fixed=overall_beta,
+    beta_time=random_time_effect,
+    sigma_y=1.,
+    Xfix=Xfix
+)
 
 # Joint
+proto_arr = ComponentArray(;
+    sigma_y = randn(params_dict["sigma_y"]["size"])
+)
+
+proto_axes = getaxes(proto_arr)
+num_params = length(proto_arr)
+
+params_dict
+comp_array = ComponentArray(
+    sigma_y=params_dict["sigma_y"]["size"]
+)
+
+for param in params_dict.keys
+    comp_array(param = params_dict[param]["size"])
+end
+
+
 function log_joint(theta_hat)
-    sigma_y = reshape(
-        params_dict["sigma_y"]["bij"].(theta_hat[params_dict["sigma_y"]["from"]:params_dict["sigma_y"]["to"]]),
-        params_dict["sigma_y"]["size"]
+    sigma_y = params_dict["sigma_y"]["bij"].(
+        theta_hat[params_dict["sigma_y"]["from"]]
     )
-    beta_fixed = reshape(
-        params_dict["beta_fixed"]["bij"](theta_hat[params_dict["beta_fixed"]["from"]:params_dict["beta_fixed"]["to"]]),
-        params_dict["beta_fixed"]["size"]
-    )
+
+    beta_fixed = params_dict["beta_fixed"]["bij"].(theta_hat[params_dict["beta_fixed"]["from"]:params_dict["beta_fixed"]["to"]])
+
     # beta_random = reshape(
     #     params_dict["beta_random"]["bij"](theta_hat[params_dict["beta_random"]["from"]:params_dict["beta_random"]["to"]]),
     #     params_dict["beta_random"]["size"]
     # )
-    beta0_fixed = params_dict["beta0_fixed"]["bij"](theta_hat[params_dict["beta0_fixed"]["from"]:params_dict["beta0_fixed"]["to"]])
-    sigma_beta0 = params_dict["sigma_beta0"]["bij"].(theta_hat[params_dict["sigma_beta0"]["from"]:params_dict["sigma_beta0"]["to"]])
+    beta0_fixed = params_dict["beta0_fixed"]["bij"](theta_hat[params_dict["beta0_fixed"]["from"]])
+    sigma_beta0 = params_dict["sigma_beta0"]["bij"].(theta_hat[params_dict["sigma_beta0"]["from"]])
     beta0_random = params_dict["beta0_random"]["bij"](theta_hat[params_dict["beta0_random"]["from"]:params_dict["beta0_random"]["to"]])
+
+    sigma_beta_time = params_dict["sigma_beta_time"]["bij"].(theta_hat[params_dict["sigma_beta_time"]["from"]])
+    beta_time = params_dict["beta_time"]["bij"](theta_hat[params_dict["beta_time"]["from"]:params_dict["beta_time"]["to"]])
 
     loglik = log_likelihood(
         y=y,
+        beta0_fixed=beta0_fixed,
         beta0_random=beta0_random,
         beta_fixed=beta_fixed,
+        beta_time=beta_time,
         sigma_y=sigma_y,
         Xfix=Xfix
     )
 
-    log_prior = log_prior_sigma_y(sigma_y[1]) +
+    log_prior = log_prior_sigma_y(sigma_y) +
         log_prior_beta_fixed(beta_fixed) +
-        log_prior_beta0_fixed(beta0_fixed[1]) +
-        log_prior_sigma_beta0(sigma_beta0[1]) +
-        log_prior_beta0_random(beta0_random[1], sigma_beta0[1], beta0_random)
+        log_prior_beta0_fixed(beta0_fixed) +
+        log_prior_sigma_beta0(sigma_beta0) +
+        log_prior_beta0_random(beta0_fixed, sigma_beta0, beta0_random) +
+        log_prior_sigma_beta_time(sigma_beta_time) +
+        log_prior_beta_time(sigma_beta_time, beta_time)
     
     loglik + log_prior
 end
 theta_hat = ones(num_params)
-log_joint(ones(num_params))
+log_joint(theta_hat)
 
 # Variational Distribution
 # Provide a mapping from distribution parameters to the distribution θ ↦ q(⋅∣θ):
@@ -317,7 +345,7 @@ end
 getq(ones(num_weights))
 
 # Chose the VI algorithm
-advi = AdvancedVI.ADVI(10, 10_000)
+advi = AdvancedVI.ADVI(10, 5_000)
 # vi(model, alg::ADVI, q, θ_init; optimizer = TruncatedADAGrad())
 q = vi(log_joint, advi, getq, randn(num_weights))
 
@@ -334,14 +362,26 @@ histogram!(samples[3, :], label="beta Overall 2")
 histogram!(samples[4, :], label="beta Overall 3")
 histogram!(samples[5, :], label="beta Overall 4")
 
-histogram(samples[8, :], label="beta Overall 1")
-histogram!(samples[9, :], label="beta Overall 2")
-histogram!(samples[10, :], label="beta Overall 3")
-histogram!(samples[11, :], label="beta Overall 4")
+histogram(samples[48, :], label="beta Overall 1")
+histogram!(samples[49, :], label="beta Overall 2")
+histogram!(samples[50, :], label="beta Overall 3")
+histogram!(samples[51, :], label="beta Overall 4")
 
-histogram(samples[12, :], label="beta 0 fixed")
+overall_intercept
+histogram(samples[52, :], label="beta 0 fixed")
 
-histogram(params_dict["sigma_beta0"]["bij"].(samples[13, :]), label="sigma beta 0")
+histogram(params_dict["sigma_beta0"]["bij"].(samples[53, :]), label="sigma beta 0")
+
+histogram(params_dict["sigma_beta_time"]["bij"].(samples[254, :]), label="sigma beta time")
+
+# beta time
+params_dict["beta_time"]
+random_time_effect
+plt = histogram(samples[params_dict["beta_time"]["from"], :], label="beta time $(1)")
+for tt in range(2, n_per_ind)
+    histogram!(samples[params_dict["beta_time"]["from"] + tt - 1, :], label="beta time $(tt)", alpha=0.5)
+end
+display(plt)
 
 random_intercept
 histogram(samples[48, :], label="beta 0 1")
