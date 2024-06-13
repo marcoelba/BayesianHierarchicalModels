@@ -269,26 +269,37 @@ log_likelihood(
 )
 
 # Joint
-proto_arr = ComponentArray(;
-    sigma_y = randn(params_dict["sigma_y"]["size"])
+params_names = tuple(Symbol.(params_dict.keys)...)
+proto_array = ComponentArray(;
+    [Symbol(pp) => randn(params_dict[pp]["size"]) for pp in params_dict.keys]...
 )
+proto_axes = getaxes(proto_array)
+num_params = length(proto_array)
 
-proto_axes = getaxes(proto_arr)
-num_params = length(proto_arr)
 
-params_dict
-comp_array = ComponentArray(
-    sigma_y=params_dict["sigma_y"]["size"]
+proto_array = ComponentArray(;
+    x=randn(3), y=randn(6)
 )
+proto_axes = getaxes(proto_array)
+num_params = length(proto_array)
 
-for param in params_dict.keys
-    comp_array(param = params_dict[param]["size"])
+
+(gg, ff) = begin
+    @unpack (x, y) = ComponentArray(ones(num_params), proto_axes)
+    (x, y)
 end
 
 
+
 function log_joint(theta_hat)
+    params_names = begin
+        @unpack params_names = ComponentArray(theta_hat, proto_axes)
+        params_names
+    end
+
     sigma_y = params_dict["sigma_y"]["bij"].(
         theta_hat[params_dict["sigma_y"]["from"]]
+
     )
 
     beta_fixed = params_dict["beta_fixed"]["bij"].(theta_hat[params_dict["beta_fixed"]["from"]:params_dict["beta_fixed"]["to"]])
