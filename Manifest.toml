@@ -2,12 +2,12 @@
 
 julia_version = "1.9.3"
 manifest_format = "2.0"
-project_hash = "620782838012139f5e376480818d96f0dec986ba"
+project_hash = "68feb8b2073ed5a4e4e3abba1e40f84f3218fcc2"
 
 [[deps.ADTypes]]
-git-tree-sha1 = "f2b16fe1a3491b295105cae080c2a5f77a842718"
+git-tree-sha1 = "016833eb52ba2d6bea9fcb50ca295980e728ee24"
 uuid = "47edcb42-4c32-4615-8424-f2b9edc5f35b"
-version = "0.2.3"
+version = "0.2.7"
 
 [[deps.AbstractFFTs]]
 deps = ["LinearAlgebra"]

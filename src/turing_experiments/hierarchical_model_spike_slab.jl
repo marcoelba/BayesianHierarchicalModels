@@ -177,10 +177,51 @@ prior_sigma_y = truncated(Normal(0., 1.), 0., Inf)
 log_prior_sigma_y(sigma_y) = Distributions.logpdf(prior_sigma_y, sigma_y)
 
 # Fixed effects
+
+# Normal Distribution
+# params_dict["beta_fixed"] = OrderedDict("size" => (p), "from" => num_params+1, "to" => num_params + p, "bij" => identity)
+# num_params += p
+# prior_beta_fixed = Distributions.MultivariateNormal(zeros(p), 5.)
+# log_prior_beta_fixed(beta_fixed) = Distributions.logpdf(prior_beta_fixed, beta_fixed)
+
+# Spike and Slab distribution
+# prob Spike and Slab
+params_dict["gamma_logit"] = OrderedDict("size" => (p), "from" => num_params+1, "to" => num_params + p, "bij" => StatsFuns.logistic)
+num_params += p
+prior_gamma_logit = Turing.filldist(LogitRelaxedBernoulli(0.5, 0.01), p)
+log_prior_gamma_logit(gamma_logit) = Distributions.logpdf(prior_gamma_logit, gamma_logit)
+
+# prior sigma beta Slab
+params_dict["sigma_slab"] = OrderedDict("size" => (1), "from" => num_params+1, "to" => num_params + 1, "bij" => StatsFuns.softplus)
+num_params += 1
+prior_sigma_slab = truncated(Normal(0., 0.1), 0., Inf)
+log_prior_sigma_slab(sigma_slab) = Distributions.logpdf(prior_sigma_slab, sigma_slab)
+
+# prior beta
+# SS
+# function log_prior_beta(gamma, sigma_beta, beta)
+#     Distributions.logpdf(
+#         Turing.arraydist([
+#             GaussianSpikeSlab(0., sigma_beta, gg) for gg in gamma
+#         ]),
+#         beta
+#     )
+# end
+
+# Continuous Mixture
 params_dict["beta_fixed"] = OrderedDict("size" => (p), "from" => num_params+1, "to" => num_params + p, "bij" => identity)
 num_params += p
-prior_beta_fixed = Distributions.MultivariateNormal(zeros(p), 5.)
-log_prior_beta_fixed(beta_fixed) = Distributions.logpdf(prior_beta_fixed, beta_fixed)
+function log_prior_beta_fixed(gamma, sigma_slab, beta_fixed)
+    Distributions.logpdf(
+        Turing.arraydist([
+            Distributions.MixtureModel(Normal[
+                Normal(0., 10. * sigma_slab),
+                Normal(0., sigma_slab)
+            ], [gg, 1. - gg]) for gg in gamma
+        ]),
+        beta_fixed
+    )
+end
 
 # Random effects
 # params_dict["beta_random"] = OrderedDict("size" => (p, n_groups), "from" => num_params+1, "to" => num_params + p*n_groups, "bij" => identity)
@@ -248,16 +289,19 @@ likelihood(
     Xfix=Xfix
 )
 
-log_likelihood(;y, beta0_fixed, beta0_random, beta_fixed, beta_time, sigma_y, Xfix, beta_random=NaN, Xrand=NaN) = sum(
-    Distributions.logpdf(likelihood(
-        beta0_fixed=beta0_fixed,
-        beta0_random=beta0_random,
-        beta_fixed=beta_fixed,
-        beta_time=beta_time,
-        sigma_y=sigma_y,
-        Xfix=Xfix
-    ), y)
-)
+function log_likelihood(;y, beta0_fixed, beta0_random, beta_fixed, beta_time, sigma_y, Xfix, beta_random=NaN, Xrand=NaN)
+    sum(
+        Distributions.logpdf(likelihood(
+            beta0_fixed=beta0_fixed,
+            beta0_random=beta0_random,
+            beta_fixed=beta_fixed,
+            beta_time=beta_time,
+            sigma_y=sigma_y,
+            Xfix=Xfix
+        ), y)
+    )
+end
+
 log_likelihood(
     y=y,
     beta0_fixed=overall_intercept,
@@ -271,49 +315,33 @@ log_likelihood(
 # Joint
 params_names = tuple(Symbol.(params_dict.keys)...)
 proto_array = ComponentArray(;
-    [Symbol(pp) => randn(params_dict[pp]["size"]) for pp in params_dict.keys]...
+    [Symbol(pp) => ifelse(params_dict[pp]["size"] > 1, randn(params_dict[pp]["size"]), randn(params_dict[pp]["size"])[1])  for pp in params_dict.keys]...
 )
 proto_axes = getaxes(proto_array)
 num_params = length(proto_array)
-
-
-proto_array = ComponentArray(;
-    x=randn(3), y=randn(6)
-)
-proto_axes = getaxes(proto_array)
-num_params = length(proto_array)
-
-
-(gg, ff) = begin
-    @unpack (x, y) = ComponentArray(ones(num_params), proto_axes)
-    (x, y)
-end
-
 
 
 function log_joint(theta_hat)
-    params_names = begin
-        @unpack params_names = ComponentArray(theta_hat, proto_axes)
-        params_names
+    begin
+        params_names = ComponentArray(theta_hat, proto_axes)
     end
 
-    sigma_y = params_dict["sigma_y"]["bij"].(
-        theta_hat[params_dict["sigma_y"]["from"]]
+    sigma_y = params_dict["sigma_y"]["bij"].(params_names.sigma_y)
 
-    )
-
-    beta_fixed = params_dict["beta_fixed"]["bij"].(theta_hat[params_dict["beta_fixed"]["from"]:params_dict["beta_fixed"]["to"]])
+    gamma = params_dict["gamma_logit"]["bij"].(params_names.gamma_logit)
+    sigma_beta_slab = params_dict["sigma_slab"]["bij"].(params_names.sigma_slab)
+    beta_fixed = params_names.beta_fixed
 
     # beta_random = reshape(
     #     params_dict["beta_random"]["bij"](theta_hat[params_dict["beta_random"]["from"]:params_dict["beta_random"]["to"]]),
     #     params_dict["beta_random"]["size"]
     # )
-    beta0_fixed = params_dict["beta0_fixed"]["bij"](theta_hat[params_dict["beta0_fixed"]["from"]])
-    sigma_beta0 = params_dict["sigma_beta0"]["bij"].(theta_hat[params_dict["sigma_beta0"]["from"]])
-    beta0_random = params_dict["beta0_random"]["bij"](theta_hat[params_dict["beta0_random"]["from"]:params_dict["beta0_random"]["to"]])
+    beta0_fixed = params_names.beta0_fixed
+    sigma_beta0 = params_dict["sigma_beta0"]["bij"].(params_names.sigma_beta0)
+    beta0_random = params_names.beta0_random
 
-    sigma_beta_time = params_dict["sigma_beta_time"]["bij"].(theta_hat[params_dict["sigma_beta_time"]["from"]])
-    beta_time = params_dict["beta_time"]["bij"](theta_hat[params_dict["beta_time"]["from"]:params_dict["beta_time"]["to"]])
+    sigma_beta_time = params_dict["sigma_beta_time"]["bij"].(params_names.sigma_beta_time)
+    beta_time = params_names.beta_time
 
     loglik = log_likelihood(
         y=y,
@@ -326,7 +354,9 @@ function log_joint(theta_hat)
     )
 
     log_prior = log_prior_sigma_y(sigma_y) +
-        log_prior_beta_fixed(beta_fixed) +
+        log_prior_gamma_logit(params_names.gamma_logit) +
+        log_prior_sigma_slab(sigma_beta_slab) +
+        log_prior_beta_fixed(gamma, sigma_beta_slab, beta_fixed) +
         log_prior_beta0_fixed(beta0_fixed) +
         log_prior_sigma_beta0(sigma_beta0) +
         log_prior_beta0_random(beta0_fixed, sigma_beta0, beta0_random) +
@@ -335,7 +365,7 @@ function log_joint(theta_hat)
     
     loglik + log_prior
 end
-theta_hat = ones(num_params)
+theta_hat = ones(num_params)*0.5
 log_joint(theta_hat)
 
 # Variational Distribution
@@ -344,7 +374,7 @@ log_joint(theta_hat)
 # Here MeanField approximation
 # theta is the parameter vector in the unconstrained space
 num_weights = num_params * 2
-half_num_params = Int(num_weights / 2)
+half_num_params = num_params
 
 function getq(theta)
     Distributions.MultivariateNormal(
@@ -356,7 +386,7 @@ end
 getq(ones(num_weights))
 
 # Chose the VI algorithm
-advi = AdvancedVI.ADVI(10, 5_000)
+advi = AdvancedVI.ADVI(10, 5_000, adtype=ADTypes.AutoTracker() )
 # vi(model, alg::ADVI, q, θ_init; optimizer = TruncatedADAGrad())
 q = vi(log_joint, advi, getq, randn(num_weights))
 
