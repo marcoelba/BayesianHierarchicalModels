@@ -14,9 +14,10 @@ using Bijectors
 using ComponentArrays, UnPack
 using ADTypes
 
+include(joinpath("mixed_models_data_generation.jl"))
+include(joinpath("mirror_statistic.jl"))
 include(joinpath("gaussian_spike_slab.jl"))
 include(joinpath("relaxed_bernoulli.jl"))
-include(joinpath("../utils/classification_metrics.jl"))
 include(joinpath("../utils/classification_metrics.jl"))
 
 
@@ -37,81 +38,11 @@ p0 = p - p1
 d = 2
 
 
-function generate_mixed_model_data(;
-    n_individuals, n_time_points,
-    p, p1, p0, beta_pool=[-1., -2., 1, 2], obs_noise_sd=1.,
-    include_random_int=true, random_intercept_sd=0.3,
-    include_random_time=true, random_time_sd=0.5,
-    include_random_slope=false, p_random_covs=0, random_slope_sd=0.5
-    )
-
-    data_dict = Dict()
-
-    Random.seed!(234)
-    # > FIXED EFFETCS <
-    # Fixed effects, baseline covariates (DO NOT change over time)
-    Xfix = Random.rand(n_individuals, p)
-    data_dict["Xfix"] = Xfix
-
-    # Fixed Coeffcients
-    beta_fixed = vcat(zeros(p0), Random.rand(beta_pool, p1))
-    beta0_fixed = 1.
-
-    data_dict["beta_fixed"] = beta_fixed
-    data_dict["beta0_fixed"] = beta0_fixed
-    
-    # > RANDOM EFFETCS <
-    
-    # Random Intercept (one per individual)
-    if include_random_int
-        beta0_random = Random.randn(n_individuals) * random_intercept_sd
-        data_dict["beta0_random"] = beta0_random
-    end
-    
-    # Random Time effect
-    if include_random_time
-        beta_time = Random.randn(n_time_points) * random_time_sd
-        data_dict["beta_time"] = beta_time
-    end
-
-    # Beta Coefficients (only random deviations)
-    if include_random_slope
-        Xrand = Xfix[:, (p - p_random_covs + 1):p]
-        beta_random = Random.randn(n_individuals, d) * random_slope_sd
-        data_dict["beta_random"] = beta_random
-    end
-    
-    # Outcome
-    y = zeros(n_individuals, n_time_points)
-    
-    # only fixed effects and random intercept
-    for ii in range(1, n_individuals)
-        y[ii, :] .= beta0_fixed .+ Xfix[ii, :]' * beta_fixed
-
-        if include_random_int
-            y[ii, :] = y[ii, :] .+ beta0_random[ii]
-        end
-
-        if include_random_time
-            y[ii, :] = y[ii, :] .+ beta_time
-        end
-    
-        if include_random_slope
-            y[ii, :] = y[ii, :] .+ Xrand[ii, :] * beta_random[ii, :]
-        end
-
-        # obs noise
-        y[ii, :] += Random.randn(n_time_points) * obs_noise_sd
-    end
-    data_dict["y"] = y
-
-    return data_dict
-end
-
 data_dict = generate_mixed_model_data(;
     n_individuals=n_individuals, n_time_points=n_per_ind, p=p, p1=p1, p0=p0,
     include_random_int=true, random_intercept_sd=0.3,
-    include_random_time=true, random_time_sd=0.5
+    include_random_time=true, random_time_sd=0.5,
+    include_random_slope=false
 )
 
 
@@ -146,20 +77,6 @@ data_dict = generate_mixed_model_data(;
             Normal(0., sigma_beta_slab)
         ], [gg, 1. - gg]) for gg in gamma
     ])
-
-    # sigma_beta ~ truncated(Normal(0., 5.), 0., Inf)
-
-    # beta_random ~ Turing.filldist(
-    #     Turing.Normal(0., sigma_beta), n_individuals, d
-    # )
-
-    # mu = beta0_fixed .+ beta0_random .+ Xfix * beta_fixed .+ sum(Xrand .* beta_random, dims=2)[:, 1]
-
-    # mu = beta0_fixed .+ beta0_random .+ Xfix * beta_fixed
-    # y ~ Turing.filldist(
-    #     Turing.MultivariateNormal(mu, ones(n_individuals) .* sigma_y),
-    #     n_per_ind
-    # )
 
     # time intercept
     mu = beta0_fixed .+ beta0_random .+ Xfix * beta_fixed
@@ -306,12 +223,12 @@ function likelihood(;beta0_fixed, beta0_random, beta_fixed, beta_time, sigma_y, 
     ])
 end
 likelihood(
-    beta0_fixed=overall_intercept,
+    beta0_fixed=data_dict["beta0_fixed"],
     beta0_random=randn(n_individuals),
-    beta_fixed=overall_beta,
-    beta_time=random_time_effect,
+    beta_fixed=data_dict["beta_fixed"],
+    beta_time=data_dict["beta_time"],
     sigma_y=1.,
-    Xfix=Xfix
+    Xfix=data_dict["Xfix"]
 )
 
 function log_likelihood(;y, beta0_fixed, beta0_random, beta_fixed, beta_time, sigma_y, Xfix, beta_random=NaN, Xrand=NaN)
@@ -328,13 +245,13 @@ function log_likelihood(;y, beta0_fixed, beta0_random, beta_fixed, beta_time, si
 end
 
 log_likelihood(
-    y=y,
-    beta0_fixed=overall_intercept,
+    y=data_dict["y"],
+    beta0_fixed=data_dict["beta0_fixed"],
     beta0_random=randn(n_individuals),
-    beta_fixed=overall_beta,
-    beta_time=random_time_effect,
+    beta_fixed=data_dict["beta_fixed"],
+    beta_time=data_dict["beta_time"],
     sigma_y=1.,
-    Xfix=Xfix
+    Xfix=data_dict["Xfix"]
 )
 
 # Joint
@@ -369,13 +286,13 @@ function log_joint(theta_hat)
     beta_time = params_names.beta_time
 
     loglik = log_likelihood(
-        y=y,
+        y=data_dict["y"],
         beta0_fixed=beta0_fixed,
         beta0_random=beta0_random,
         beta_fixed=beta_fixed,
         beta_time=beta_time,
         sigma_y=sigma_y,
-        Xfix=Xfix
+        Xfix=data_dict["Xfix"]
     )
 
     log_prior = log_prior_sigma_y(sigma_y) +
@@ -411,7 +328,7 @@ end
 getq(ones(num_weights))
 
 # Chose the VI algorithm
-advi = AdvancedVI.ADVI(10, 5_000, adtype=ADTypes.AutoTracker() )
+advi = AdvancedVI.ADVI(5, 5_000, adtype=ADTypes.AutoTracker())
 # vi(model, alg::ADVI, q, θ_init; optimizer = TruncatedADAGrad())
 q = vi(log_joint, advi, getq, randn(num_weights))
 
@@ -475,6 +392,30 @@ boxplot(vec(samples[params_dict["beta0_random"]["from"]:params_dict["beta0_rando
 
 # FDR
 classification_metrics.wrapper_metrics(
-    overall_beta .!= 0.,
+    data_dict["beta_fixed"] .!= 0.,
     posterior_summary(samples, "gamma_logit", params_dict; fun=mean)[:,1] .> 0.5
+)
+
+# Mirror Statistic - FDR control
+beta_post = samples[params_dict["beta_fixed"]["from"]:params_dict["beta_fixed"]["to"], :]
+gamma_post = params_dict["gamma_logit"]["bij"].(samples[params_dict["gamma_logit"]["from"]:params_dict["gamma_logit"]["to"], :])
+gamma_mean = mean(gamma_post, dims=2)
+
+posterior_ms = posterior_mirror_stat(
+    beta_post .* gamma_mean,
+    fdr_target=0.1
+)
+
+plt = histogram(posterior_ms["posterior_ms_coefs"][1, :])
+for j in range(2, 10)
+    histogram!(posterior_ms["posterior_ms_coefs"][j, :])
+end
+display(plt)
+
+
+point_ms_coefs = mean(posterior_ms["posterior_ms_inclusion"], dims=2)
+
+classification_metrics.wrapper_metrics(
+    data_dict["beta_fixed"] .!= 0,
+    point_ms_coefs[:, 1] .> 0.5
 )

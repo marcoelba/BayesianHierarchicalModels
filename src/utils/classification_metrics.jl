@@ -108,7 +108,7 @@ end
 """
 Compute collection of metrics
 """
-function wrapper_metrics(true_coef::Union{Array{Real}, BitVector}, pred_coef::Union{Array{Real}, BitVector})
+function wrapper_metrics(true_coef, pred_coef)
     # FDR
     fdr = false_discovery_rate(
         true_coef=true_coef,
