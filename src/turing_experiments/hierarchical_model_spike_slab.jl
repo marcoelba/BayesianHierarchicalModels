@@ -32,7 +32,7 @@ n_per_ind = 10
 n_total = n_individuals * n_per_ind
 
 # tot covariates
-p = 200
+p = 500
 prop_non_zero = 0.05
 p1 = Int(p * prop_non_zero)
 p0 = p - p1
@@ -330,6 +330,7 @@ end
 
 getq(ones(num_weights))
 
+
 # Chose the VI algorithm
 advi = AdvancedVI.ADVI(10, 5_000, adtype=ADTypes.AutoTracker())
 # vi(model, alg::ADVI, q, θ_init; optimizer = TruncatedADAGrad())
@@ -345,18 +346,18 @@ histogram_posterior(samples, "sigma_y", params_dict)
 density_posterior(samples, "beta_fixed", params_dict; plot_label=false)
 scatter(posterior_summary(samples, "beta_fixed", params_dict; fun=mean))
 
-hist_posterior(samples, "gamma_logit", params_dict; plot_label=false)
+density_posterior(samples, "gamma_logit", params_dict; plot_label=false)
 scatter(posterior_summary(samples, "gamma_logit", params_dict; fun=mean))
 
-hist_posterior(samples, "sigma_slab", params_dict; plot_label=false)
+histogram_posterior(samples, "sigma_slab", params_dict; plot_label=false)
 
-hist_posterior(samples, "beta0_fixed", params_dict; plot_label=false)
+histogram_posterior(samples, "beta0_fixed", params_dict; plot_label=false)
 
-hist_posterior(samples, "sigma_beta0", params_dict; plot_label=false)
+histogram_posterior(samples, "sigma_beta0", params_dict; plot_label=false)
 
-hist_posterior(samples, "beta_time", params_dict; plot_label=false)
+density_posterior(samples, "beta_time", params_dict; plot_label=false)
 
-hist_posterior(samples, "beta0_random", params_dict; plot_label=false)
+density_posterior(samples, "beta0_random", params_dict; plot_label=false)
 
 boxplot(vec(samples[params_dict["beta0_random"]["from"]:params_dict["beta0_random"]["to"], :]))
 
@@ -413,7 +414,7 @@ classification_metrics.wrapper_metrics(
 boxplot(point_ms_coefs[:, 1])
 
 
-# Manual training loop
+# >>>>>>>>>>>>>>>> Manual training loop <<<<<<<<<<<<<<<<<
 
 # Define objective
 variational_objective = Turing.Variational.ELBO()
@@ -422,29 +423,19 @@ variational_objective = Turing.Variational.ELBO()
 optimizer = Turing.Variational.DecayedADAGrad()
 
 # VI algorithm
-num_steps = 1_000
-samples_per_step = 1
+num_steps = 5_000
+samples_per_step = 5
 alg = AdvancedVI.ADVI(samples_per_step, num_steps, adtype=ADTypes.AutoTracker())
-
-# 6. [OPTIONAL] Implement convergence criterion
-function hasconverged(args...)
-    # ...
-end
-
-# 7. [OPTIONAL] Implement a callback for tracking stats
-function callback(alg, q, log_joint)
-    AdvancedVI.elbo(alg, q, log_joint, 100)
-end
 
 
 # --- Train loop ---
 converged = false
 step = 1
-theta = theta_init
+theta = randn(num_weights)
 elbo_trace = zeros(num_steps)
 
 prog = ProgressMeter.Progress(num_steps, 1)
-diff_results = DiffResults.GradientResult(theta_init)
+diff_results = DiffResults.GradientResult(theta)
 
 while (step ≤ num_steps) && !converged
     # 1. Compute gradient and objective value; results are stored in `diff_results`
@@ -469,4 +460,9 @@ while (step ≤ num_steps) && !converged
     ProgressMeter.next!(prog)
 end
 
-plot(elbo_trace, label="ELBO")
+plot(elbo_trace[100:num_steps], label="ELBO")
+
+q = getq(theta)
+samples = rand(q, 2000)
+size(samples)
+
