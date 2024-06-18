@@ -9,7 +9,7 @@ function posterior_summary(samples, param, param_dict; fun)
 end
 
 
-function hist_posterior(samples, param, param_dict; plot_label=true)
+function histogram_posterior(samples, param, param_dict; plot_label=true)
     from = param_dict[param]["from"]
     to = param_dict[param]["to"]
 
@@ -25,6 +25,28 @@ function hist_posterior(samples, param, param_dict; plot_label=true)
                 label = "$(param)_$(pp)"
             end
             histogram!(param_dict[param]["bij"].(samples[pp, :]), label=label)
+        end
+    end
+    display(plt)
+end
+
+
+function density_posterior(samples, param, param_dict; plot_label=true)
+    from = param_dict[param]["from"]
+    to = param_dict[param]["to"]
+
+    label = false
+    if plot_label
+        label = "$(param)_1"
+    end
+    plt = density(param_dict[param]["bij"].(samples[from, :]), label=label)
+
+    if (to - from) > 1
+        for pp in range(from+1, to)
+            if plot_label
+                label = "$(param)_$(pp)"
+            end
+            density!(param_dict[param]["bij"].(samples[pp, :]), label=label)
         end
     end
     display(plt)

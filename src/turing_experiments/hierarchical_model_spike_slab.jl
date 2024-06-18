@@ -6,10 +6,12 @@ using Random
 using LinearAlgebra
 using DataFrames
 using OrderedCollections
+using ProgressMeter
 
 using AdvancedVI
 using StatsFuns
 using Bijectors
+using DiffResults
 # bijector transfrom FROM the latent space TO the REAL line
 using ComponentArrays, UnPack
 using ADTypes
@@ -18,6 +20,7 @@ include(joinpath("mixed_models_data_generation.jl"))
 include(joinpath("mirror_statistic.jl"))
 include(joinpath("gaussian_spike_slab.jl"))
 include(joinpath("relaxed_bernoulli.jl"))
+include(joinpath("plot_functions.jl"))
 include(joinpath("../utils/classification_metrics.jl"))
 
 
@@ -30,7 +33,7 @@ n_total = n_individuals * n_per_ind
 
 # tot covariates
 p = 200
-prop_non_zero = 0.1
+prop_non_zero = 0.05
 p1 = Int(p * prop_non_zero)
 p0 = p - p1
 
@@ -46,7 +49,7 @@ data_dict = generate_mixed_model_data(;
 )
 
 
-@model function longitudinal_model(y, Xfix, Xrand)
+@model function longitudinal_model(y, Xfix)
     # Variance
     sigma_y ~ truncated(Normal(0., 1.), 0., Inf)
 
@@ -64,7 +67,7 @@ data_dict = generate_mixed_model_data(;
     # beta_time ~ Turing.Normal(0., 2.)
 
     # Covariates Fixed Effects
-    gamma_logit ~ Turing.filldist(LogitRelaxedBernoulli(0.1, 0.01), p)
+    gamma_logit ~ Turing.filldist(Normal(-1., 0.1), p)
     gamma = StatsFuns.logistic.(gamma_logit)
 
     sigma_beta_slab ~ Turing.truncated(Normal(0., 2.), 0., Inf64)
@@ -95,7 +98,7 @@ nuts_lm = sample(model, NUTS(0.65), 1000)
 """
 Using Variational Inference
 """
-model = longitudinal_model(y, Xfix, Xrand)
+model = longitudinal_model(data_dict["y"], data_dict["Xfix"])
 
 # ADVI
 advi = ADVI(5, 1000)
@@ -328,50 +331,18 @@ end
 getq(ones(num_weights))
 
 # Chose the VI algorithm
-advi = AdvancedVI.ADVI(5, 5_000, adtype=ADTypes.AutoTracker())
+advi = AdvancedVI.ADVI(10, 5_000, adtype=ADTypes.AutoTracker())
 # vi(model, alg::ADVI, q, θ_init; optimizer = TruncatedADAGrad())
-q = vi(log_joint, advi, getq, randn(num_weights))
+theta_init = randn(num_weights)
+q = vi(log_joint, advi, getq, theta_init)
 
 samples = rand(q, 2000)
 size(samples)
 
-params_dict
-overall_beta
 
-function posterior_summary(samples, param, param_dict; fun)
-    fun(
-        param_dict[param]["bij"].(
-        samples[params_dict[param]["from"]:params_dict[param]["to"], :]
-        ),
-        dims=2
-    )
-end
+histogram_posterior(samples, "sigma_y", params_dict)
 
-
-function hist_posterior(samples, param, param_dict; plot_label=true)
-    from = param_dict[param]["from"]
-    to = param_dict[param]["to"]
-
-    label = false
-    if plot_label
-        label = "$(param)_1"
-    end
-    plt = histogram(param_dict[param]["bij"].(samples[from, :]), label=label)
-
-    if (to - from) > 1
-        for pp in range(from+1, to)
-            if plot_label
-                label = "$(param)_$(pp)"
-            end
-            histogram!(param_dict[param]["bij"].(samples[pp, :]), label=label)
-        end
-    end
-    display(plt)
-end
-
-hist_posterior(samples, "sigma_y", params_dict)
-
-hist_posterior(samples, "beta_fixed", params_dict; plot_label=false)
+density_posterior(samples, "beta_fixed", params_dict; plot_label=false)
 scatter(posterior_summary(samples, "beta_fixed", params_dict; fun=mean))
 
 hist_posterior(samples, "gamma_logit", params_dict; plot_label=false)
@@ -399,19 +370,38 @@ classification_metrics.wrapper_metrics(
 # Mirror Statistic - FDR control
 beta_post = samples[params_dict["beta_fixed"]["from"]:params_dict["beta_fixed"]["to"], :]
 gamma_post = params_dict["gamma_logit"]["bij"].(samples[params_dict["gamma_logit"]["from"]:params_dict["gamma_logit"]["to"], :])
+sigma_slab_post = params_dict["sigma_slab"]["bij"].(samples[params_dict["sigma_slab"]["from"], :])
+
+sigma_slab_mean = mean(sigma_slab_post)
 gamma_mean = mean(gamma_post, dims=2)
 
-posterior_ms = posterior_mirror_stat(
-    beta_post .* gamma_mean,
-    fdr_target=0.1
-)
+beta_ss_post = (Random.randn(p, 2000) .* sigma_slab_mean) .* (gamma_mean .< 0.5) .+ 
+    beta_post .* (gamma_mean .>= 0.5)
 
-plt = histogram(posterior_ms["posterior_ms_coefs"][1, :])
+plt = density(beta_ss_post[1, :], label=false)
 for j in range(2, 10)
-    histogram!(posterior_ms["posterior_ms_coefs"][j, :])
+    density!(beta_ss_post[j, :], label=false)
+end
+for j in range(p0+1, p)
+    density!(beta_ss_post[j, :], label=false)
 end
 display(plt)
 
+posterior_ms = posterior_mirror_stat(
+    beta_ss_post,
+    fdr_target=0.3
+)
+
+posterior_ms = posterior_mirror_stat(
+    beta_post,
+    fdr_target=0.1
+)
+
+plt = density(posterior_ms["posterior_ms_coefs"][1, :], label=false)
+for j in range(2, p0)
+    density!(posterior_ms["posterior_ms_coefs"][j, :], label=false)
+end
+display(plt)
 
 point_ms_coefs = mean(posterior_ms["posterior_ms_inclusion"], dims=2)
 
@@ -419,3 +409,64 @@ classification_metrics.wrapper_metrics(
     data_dict["beta_fixed"] .!= 0,
     point_ms_coefs[:, 1] .> 0.5
 )
+
+boxplot(point_ms_coefs[:, 1])
+
+
+# Manual training loop
+
+# Define objective
+variational_objective = Turing.Variational.ELBO()
+
+# Optimizer
+optimizer = Turing.Variational.DecayedADAGrad()
+
+# VI algorithm
+num_steps = 1_000
+samples_per_step = 1
+alg = AdvancedVI.ADVI(samples_per_step, num_steps, adtype=ADTypes.AutoTracker())
+
+# 6. [OPTIONAL] Implement convergence criterion
+function hasconverged(args...)
+    # ...
+end
+
+# 7. [OPTIONAL] Implement a callback for tracking stats
+function callback(alg, q, log_joint)
+    AdvancedVI.elbo(alg, q, log_joint, 100)
+end
+
+
+# --- Train loop ---
+converged = false
+step = 1
+theta = theta_init
+elbo_trace = zeros(num_steps)
+
+prog = ProgressMeter.Progress(num_steps, 1)
+diff_results = DiffResults.GradientResult(theta_init)
+
+while (step ≤ num_steps) && !converged
+    # 1. Compute gradient and objective value; results are stored in `diff_results`
+    AdvancedVI.grad!(variational_objective, alg, getq, log_joint, theta, diff_results, samples_per_step)
+
+    # 2. Extract gradient from `diff_result`
+    gradient = DiffResults.gradient(diff_results)
+
+    # 3. Apply optimizer, e.g. multiplying by step-size
+    diff_grad = AdvancedVI.apply!(optimizer, theta, gradient)
+
+    # 4. Update parameters
+    @. theta = theta - diff_grad
+
+    # 5. Do whatever analysis you want - Store ELBO value
+    elbo_trace[step] = AdvancedVI.elbo(alg, getq(theta), log_joint, samples_per_step)
+
+    # 6. Update
+    # converged = hasconverged(...) # or something user-defined
+    step += 1
+
+    ProgressMeter.next!(prog)
+end
+
+plot(elbo_trace, label="ELBO")
