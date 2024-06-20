@@ -18,12 +18,12 @@ using Zygote
 using Turing
 using AdvancedVI
 
-include(joinpath("decayed_ada_grad.jl"))
 include(joinpath("mixed_models_data_generation.jl"))
 include(joinpath("mirror_statistic.jl"))
 include(joinpath("gaussian_spike_slab.jl"))
 include(joinpath("relaxed_bernoulli.jl"))
 include(joinpath("plot_functions.jl"))
+include(joinpath("decayed_ada_grad.jl"))
 include(joinpath("../utils/classification_metrics.jl"))
 
 
@@ -48,59 +48,11 @@ data_dict = generate_mixed_model_data(;
     n_individuals=n_individuals, n_time_points=n_per_ind, p=p, p1=p1, p0=p0,
     include_random_int=true, random_intercept_sd=0.3,
     include_random_time=true, random_time_sd=0.5,
-    include_random_slope=false
+    include_random_slope=false, dtype=Float64
 )
 
 
-@model function longitudinal_model(y, Xfix)
-    # Variance
-    sigma_y ~ truncated(Normal(0., 1.), 0., Inf)
-
-    # Intercept
-    beta0_fixed ~ Turing.Normal(0., 5.)
-
-    sigma_beta0 ~ truncated(Normal(0., 5.), 0., Inf)
-
-    beta0_random ~ Turing.MultivariateNormal(zeros(n_individuals), sigma_beta0)
-
-    # beta0_random ~ Turing.filldist(Turing.Normal(0., sigma_beta0), n_individuals)
-    
-    sigma_beta_time ~ truncated(Normal(0., 1.), 0., Inf)
-    beta_time ~ Turing.filldist(Turing.Normal(0., sigma_beta_time), n_per_ind)
-    # beta_time ~ Turing.Normal(0., 2.)
-
-    # Covariates Fixed Effects
-    gamma_logit ~ Turing.filldist(Normal(-1., 0.1), p)
-    gamma = StatsFuns.logistic.(gamma_logit)
-
-    sigma_beta_slab ~ Turing.truncated(Normal(0., 2.), 0., Inf64)
-
-    # beta_fixed ~ Turing.arraydist([GaussianSpikeSlab(0., sigma_beta_slab, gg) for gg in gamma])
-
-    beta_fixed ~ Turing.arraydist([
-        Distributions.MixtureModel(Normal[
-            Normal(0., 10. * sigma_beta_slab),
-            Normal(0., sigma_beta_slab)
-        ], [gg, 1. - gg]) for gg in gamma
-    ])
-
-    # time intercept
-    mu = beta0_fixed .+ beta0_random .+ Xfix * beta_fixed
-    y ~ Turing.arraydist([
-        Turing.MultivariateNormal(mu .+ beta_time[tt] , ones(n_individuals) .* sigma_y)
-        for tt in range(1, n_per_ind)
-    ])
-
-end
-
-
-model = longitudinal_model(y, Xfix, Xrand)
-nuts_lm = sample(model, NUTS(0.65), 1000)
-
-
-"""
-Using Variational Inference
-"""
+# <<<<<<<< Custom made model >>>>>>>>>>>
 
 # Prior distributions
 params_dict = OrderedDict()
@@ -110,7 +62,7 @@ num_params = 0
 params_dict["sigma_y"] = OrderedDict("size" => (1), "from" => 1, "to" => 1, "bij" => StatsFuns.softplus)
 num_params += 1
 prior_sigma_y = truncated(Normal(0f0, 1f0), 0f0, Inf32)
-log_prior_sigma_y(sigma_y::Float32) = Distributions.logpdf(prior_sigma_y, sigma_y)
+log_prior_sigma_y(sigma_y) = Distributions.logpdf(prior_sigma_y, sigma_y)
 
 # Fixed effects
 
@@ -125,13 +77,13 @@ log_prior_sigma_y(sigma_y::Float32) = Distributions.logpdf(prior_sigma_y, sigma_
 params_dict["gamma_logit"] = OrderedDict("size" => (p), "from" => num_params+1, "to" => num_params + p, "bij" => StatsFuns.logistic)
 num_params += p
 prior_gamma_logit = Turing.filldist(LogitRelaxedBernoulli(0.1f0, 0.1f0), p)
-log_prior_gamma_logit(gamma_logit::AbstractArray{Float32}) = Distributions.logpdf(prior_gamma_logit, gamma_logit)
+log_prior_gamma_logit(gamma_logit) = Distributions.logpdf(prior_gamma_logit, gamma_logit)
 
 # prior sigma beta Slab
 params_dict["sigma_slab"] = OrderedDict("size" => (1), "from" => num_params+1, "to" => num_params + 1, "bij" => StatsFuns.softplus)
 num_params += 1
 prior_sigma_slab = truncated(Normal(0f0, 0.1f0), 0f0, Inf32)
-log_prior_sigma_slab(sigma_slab::Float32) = Distributions.logpdf(prior_sigma_slab, sigma_slab)
+log_prior_sigma_slab(sigma_slab) = Distributions.logpdf(prior_sigma_slab, sigma_slab)
 
 # prior beta
 # SS
@@ -147,7 +99,8 @@ log_prior_sigma_slab(sigma_slab::Float32) = Distributions.logpdf(prior_sigma_sla
 # Continuous Mixture
 params_dict["beta_fixed"] = OrderedDict("size" => (p), "from" => num_params+1, "to" => num_params + p, "bij" => identity)
 num_params += p
-function log_prior_beta_fixed(gamma::AbstractArray{Float32}, sigma_slab::Float32, beta_fixed::AbstractArray{Float32})
+
+function log_prior_beta_fixed(gamma, sigma_slab, beta_fixed)
     Distributions.logpdf(
         Turing.arraydist([
             Distributions.MixtureModel(Normal[
@@ -164,19 +117,25 @@ function log_prior_beta_fixed(
     w::AbstractArray{<:Real},
     sd_spike::Real,
     x::AbstractArray{<:Real};
-    mu=Float32(0),
-    slab_multiplier=Float32(5.)
+    mu=0.,
+    slab_multiplier=5.
     )
-    sd = hcat(sd_spike, sd_spike * slab_multiplier)
+    sd::AbstractArray{<:Real} = [sd_spike;; sd_spike * slab_multiplier]
 
     w_ext = hcat(w, 1f0 .- w)
     xstd = -0.5f0 .* ((x .- mu) ./ sd).^2f0
-    wstd = w_ext ./ (sqrt(2f0 .* Float32(pi)) .* sd)
+    wstd = w_ext ./ (sqrt(2f0 .* pi) .* sd)
     offset = maximum(xstd .* wstd, dims=2)
     xe = exp.(xstd .- offset)
     s = sum(xe .* wstd, dims=2)
     sum(log.(s) .+ offset)
 end
+
+# w = [0.1, 0.5, 0.9]
+# sd_spike = 0.2
+# x = [1., 0.1, 2.]
+# log_prior_beta_fixed(w, sd_spike, x)
+# logpdf_mixture_normal(w, sd_spike, x)
 
 # Random effects
 # params_dict["beta_random"] = OrderedDict("size" => (p, n_groups), "from" => num_params+1, "to" => num_params + p*n_groups, "bij" => identity)
@@ -194,17 +153,17 @@ end
 params_dict["beta0_fixed"] = OrderedDict("size" => (1), "from" => num_params+1, "to" => num_params + 1, "bij" => identity)
 num_params += 1
 prior_beta0_fixed = Distributions.Normal(0f0, 5f0)
-log_prior_beta0_fixed(beta0_fixed::Float32) = Distributions.logpdf(prior_beta0_fixed, beta0_fixed)
+log_prior_beta0_fixed(beta0_fixed) = Distributions.logpdf(prior_beta0_fixed, beta0_fixed)
 
 params_dict["sigma_beta0"] = OrderedDict("size" => (1), "from" => num_params+1, "to" => num_params + 1, "bij" => StatsFuns.softplus)
 num_params += 1
 prior_sigma_beta0 = truncated(Normal(0f0, 1f0), 0f0, Inf)
-log_prior_sigma_beta0(sigma_beta0::Float32) = Distributions.logpdf(prior_sigma_beta0, sigma_beta0)
+log_prior_sigma_beta0(sigma_beta0) = Distributions.logpdf(prior_sigma_beta0, sigma_beta0)
 
 # Random Intercept
 params_dict["beta0_random"] = OrderedDict("size" => (n_individuals), "from" => num_params+1, "to" => num_params + n_individuals, "bij" => identity)
 num_params += n_individuals
-function log_prior_beta0_random(beta0_fixed::Float32, sigma_beta0::Float32, beta0_random::AbstractArray{Float32})
+function log_prior_beta0_random(beta0_fixed, sigma_beta0, beta0_random)
     Distributions.logpdf(
         Turing.filldist(Distributions.Normal(beta0_fixed, sigma_beta0), n_individuals),
         beta0_random
@@ -215,11 +174,11 @@ end
 params_dict["sigma_beta_time"] = OrderedDict("size" => (1), "from" => num_params+1, "to" => num_params + 1, "bij" => StatsFuns.softplus)
 num_params += 1
 prior_sigma_beta_time = truncated(Normal(0f0, 1f0), 0f0, Inf32)
-log_prior_sigma_beta_time(sigma_beta_time::Float32) = Distributions.logpdf(prior_sigma_beta_time, sigma_beta_time)
+log_prior_sigma_beta_time(sigma_beta_time) = Distributions.logpdf(prior_sigma_beta_time, sigma_beta_time)
 
 params_dict["beta_time"] = OrderedDict("size" => (n_per_ind), "from" => num_params+1, "to" => num_params + n_per_ind, "bij" => identity)
 num_params += n_per_ind
-function log_prior_beta_time(sigma_beta_time::Float32, beta_time::AbstractArray{Float32})
+function log_prior_beta_time(sigma_beta_time, beta_time)
     Distributions.logpdf(
         Turing.filldist(Distributions.Normal(0f0, sigma_beta_time), n_per_ind),
         beta_time
@@ -228,14 +187,14 @@ end
 
 # Likelihood
 function likelihood(;
-    beta0_fixed::Float32, 
-    beta0_random::AbstractArray{Float32},
-    beta_fixed::AbstractArray{Float32},
-    beta_time::AbstractArray{Float32},
-    sigma_y::Float32,
-    Xfix::AbstractArray{Float32},
-    beta_random::AbstractArray{Float32}=zeros32(1),
-    Xrand::AbstractArray{Float32}=zeros32(1)
+    beta0_fixed, 
+    beta0_random,
+    beta_fixed,
+    beta_time,
+    sigma_y,
+    Xfix,
+    beta_random=zeros32(1),
+    Xrand=zeros32(1)
     )
     Turing.arraydist([
         Distributions.MultivariateNormal(
@@ -254,15 +213,15 @@ likelihood(
 )
 
 function log_likelihood(;
-    y::AbstractArray{Float32},
-    beta0_fixed::Float32,
-    beta0_random::AbstractArray{Float32},
-    beta_fixed::AbstractArray{Float32},
-    beta_time::AbstractArray{Float32},
-    sigma_y::Float32,
-    Xfix::AbstractArray{Float32},
-    beta_random::AbstractArray{Float32}=zeros32(1),
-    Xrand::AbstractArray{Float32}=zeros32(1)
+    y,
+    beta0_fixed,
+    beta0_random,
+    beta_fixed,
+    beta_time,
+    sigma_y,
+    Xfix,
+    beta_random=zeros32(1),
+    Xrand=zeros32(1)
     )
     sum(
         Distributions.logpdf(likelihood(
@@ -295,7 +254,7 @@ proto_axes = getaxes(proto_array)
 num_params = length(proto_array)
 
 
-function log_joint(theta_hat::AbstractArray{Float32})
+function log_joint(theta_hat)
     begin
         params_names = ComponentArray(theta_hat, proto_axes)
     end
@@ -350,7 +309,7 @@ log_joint(theta_hat)
 num_weights = num_params * 2
 half_num_params = num_params
 
-function getq(theta::AbstractArray{Float32})
+function getq(theta)
     Distributions.MultivariateNormal(
         theta[1:half_num_params],
         StatsFuns.softplus.(theta[half_num_params+1:half_num_params*2])
@@ -451,19 +410,20 @@ variational_objective = Turing.Variational.ELBO()
 # Optimizer
 optimizer = Turing.Variational.DecayedADAGrad()
 optimizer = DecayedADAGrad()
+optimizer = Flux.AdaGrad()
 optimizer = Flux.Adam(0.001)
 
 # VI algorithm
 num_steps = 1000
 samples_per_step = 1
-# alg = AdvancedVI.ADVI(samples_per_step, num_steps, adtype=ADTypes.AutoTracker())
+alg = AdvancedVI.ADVI(samples_per_step, num_steps, adtype=ADTypes.AutoTracker())
 alg = AdvancedVI.ADVI(samples_per_step, num_steps, adtype=ADTypes.AutoZygote())
 
 # --- Train loop ---
 converged = false
 step = 1
-theta = randn32(num_weights) * 0.1f0
-elbo_trace = zeros32(num_steps)
+theta = randn(num_weights) * 0.1f0
+elbo_trace = zeros(num_steps)
 
 prog = ProgressMeter.Progress(num_steps, 1)
 diff_results = DiffResults.GradientResult(theta)
@@ -472,20 +432,11 @@ while (step ≤ num_steps) && !converged
     # 1. Compute gradient and objective value; results are stored in `diff_results`
     AdvancedVI.grad!(variational_objective, alg, getq, log_joint, theta, diff_results, samples_per_step)
 
-    # vo(theta) = -variational_objective(alg, getq(theta), log_joint, samples_per_step)
-    
-    # loss, grads = Zygote.withgradient(theta) do params
-    #     vo(params)
-    # end
-    # Flux.Optimise.update!(optimizer, theta, grads[1])
-    # apply!(optimizer, theta, grads[1])
-    # @. theta = theta - grads[1]
-
-    # # 2. Extract gradient from `diff_result`
+    # 2. Extract gradient from `diff_result`
     gradient_step = DiffResults.gradient(diff_results)
 
-    # # 3. Apply optimizer, e.g. multiplying by step-size
-    diff_grad = apply!(optimizer, theta, gradient_step)
+    # 3. Apply optimizer, e.g. multiplying by step-size
+    diff_grad = VIAdaGrad.apply!(optimizer, theta, gradient_step)
 
     # 4. Update parameters
     @. theta = theta - diff_grad
