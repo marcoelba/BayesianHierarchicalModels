@@ -35,8 +35,8 @@ n_per_ind = 10
 n_total = n_individuals * n_per_ind
 
 # tot covariates
-p = 200
-prop_non_zero = 0.1
+p = 1000
+prop_non_zero = 0.05
 p1 = Int(p * prop_non_zero)
 p0 = p - p1
 
@@ -147,27 +147,28 @@ log_prior_sigma_slab(sigma_slab::Float32) = Distributions.logpdf(prior_sigma_sla
 # Continuous Mixture
 params_dict["beta_fixed"] = OrderedDict("size" => (p), "from" => num_params+1, "to" => num_params + p, "bij" => identity)
 num_params += p
-function log_prior_beta_fixed(gamma::AbstractArray{Float32}, sigma_slab::Float32, beta_fixed::AbstractArray{Float32})
-    Distributions.logpdf(
-        Turing.arraydist([
-            Distributions.MixtureModel(Normal[
-                Normal(0f0, 5f0 * sigma_slab),
-                Normal(0f0, sigma_slab)
-            ], [gg, 1f0 - gg]) for gg in gamma
-        ]),
-        beta_fixed
-    )
-end
+
+# function log_prior_beta_fixed(gamma::AbstractArray{Float32}, sigma_slab::Float32, beta_fixed::AbstractArray{Float32})
+#     Distributions.logpdf(
+#         Turing.arraydist([
+#             Distributions.MixtureModel(Normal[
+#                 Normal(0f0, 5f0 * sigma_slab),
+#                 Normal(0f0, sigma_slab)
+#             ], [gg, 1f0 - gg]) for gg in gamma
+#         ]),
+#         beta_fixed
+#     )
+# end
 
 # Custom function
 function log_prior_beta_fixed(
-    w::AbstractArray{<:Real},
-    sd_spike::Real,
-    x::AbstractArray{<:Real};
+    w::AbstractArray{<:Float32},
+    sd_spike::Float32,
+    x::AbstractArray{<:Float32};
     mu=Float32(0),
     slab_multiplier=Float32(5.)
     )
-    sd = hcat(sd_spike, sd_spike * slab_multiplier)
+    sd = hcat(sd_spike * slab_multiplier, sd_spike)
 
     w_ext = hcat(w, 1f0 .- w)
     xstd = -0.5f0 .* ((x .- mu) ./ sd).^2f0
@@ -351,21 +352,83 @@ num_weights = num_params * 2
 half_num_params = num_params
 
 function getq(theta::AbstractArray{Float32})
-    Distributions.MultivariateNormal(
-        theta[1:half_num_params],
-        StatsFuns.softplus.(theta[half_num_params+1:half_num_params*2])
-    )
+    # Distributions.MultivariateNormal(
+    #     theta[1:half_num_params],
+    #     StatsFuns.softplus.(theta[half_num_params+1:half_num_params*2])
+    # )
+    mu_vec = theta[1:half_num_params]
+    sigma_vec = StatsFuns.softplus.(theta[half_num_params+1:half_num_params*2])
+
+    Turing.arraydist([
+        Normal(mu_vec[w], sigma_vec[w]) for w in range(1, num_params)
+    ])
 end
 
-getq(ones32(num_weights))
+q = getq(ones32(num_weights))
+size(q)
 
+# >>>>>>>>>>>>>>>> Manual training loop <<<<<<<<<<<<<<<<<
 
-# Chose the VI algorithm
-advi = AdvancedVI.ADVI(10, 5_000, adtype=ADTypes.AutoZygote())
-# vi(model, alg::ADVI, q, θ_init; optimizer = TruncatedADAGrad())
-theta_init = randn(num_weights)
-q = vi(log_joint, advi, getq, theta_init)
+# Define objective
+variational_objective = Turing.Variational.ELBO()
 
+# Optimizer
+optimizer = DecayedADAGrad()
+# optimizer = Flux.Adam(0.001)
+
+# VI algorithm
+num_steps = 2000
+samples_per_step = 5
+alg = AdvancedVI.ADVI(samples_per_step, num_steps, adtype=ADTypes.AutoZygote())
+
+# --- Train loop ---
+converged = false
+step = 1
+theta = randn32(num_weights) * 0.2f0
+elbo_trace = zeros32(num_steps)
+theta_trace = zeros32(num_steps, num_weights)
+
+prog = ProgressMeter.Progress(num_steps, 1)
+diff_results = DiffResults.GradientResult(theta)
+
+while (step ≤ num_steps) && !converged
+    # 1. Compute gradient and objective value; results are stored in `diff_results`
+    AdvancedVI.grad!(variational_objective, alg, getq, log_joint, theta, diff_results, samples_per_step)
+
+    # vo(theta) = -variational_objective(alg, getq(theta), log_joint, samples_per_step)
+    
+    # loss, grads = Zygote.withgradient(theta) do params
+    #     vo(params)
+    # end
+    # Flux.Optimise.update!(optimizer, theta, grads[1])
+    # apply!(optimizer, theta, grads[1])
+    # @. theta = theta - grads[1]
+
+    # # 2. Extract gradient from `diff_result`
+    gradient_step = DiffResults.gradient(diff_results)
+
+    # # 3. Apply optimizer, e.g. multiplying by step-size
+    diff_grad = apply!(optimizer, theta, gradient_step)
+
+    # 4. Update parameters
+    @. theta = theta - diff_grad
+
+    # 5. Do whatever analysis you want - Store ELBO value
+    elbo_trace[step] = AdvancedVI.elbo(alg, getq(theta), log_joint, samples_per_step)
+    theta_trace[step, :] = deepcopy(theta)
+
+    step += 1
+
+    ProgressMeter.next!(prog)
+end
+
+plot(elbo_trace, label="ELBO")
+plot(elbo_trace[300:num_steps], label="ELBO")
+
+plot(theta_trace[:, 2:10], label=false)
+plot(theta_trace[:, 100:110], label=false)
+
+q = getq(theta)
 samples = rand(q, 2000)
 size(samples)
 
@@ -409,7 +472,7 @@ beta_ss_post = (Random.randn(p, 2000) .* sigma_slab_mean) .* (gamma_mean .< 0.5)
     beta_post .* (gamma_mean .>= 0.5)
 
 plt = density(beta_ss_post[1, :], label=false)
-for j in range(2, 10)
+for j in range(2, p0)
     density!(beta_ss_post[j, :], label=false)
 end
 for j in range(p0+1, p)
@@ -419,12 +482,12 @@ display(plt)
 
 posterior_ms = posterior_mirror_stat(
     beta_ss_post,
-    fdr_target=0.3
+    fdr_target=0.1
 )
 
 posterior_ms = posterior_mirror_stat(
-    beta_post,
-    fdr_target=0.1
+    beta_post .* gamma_post,
+    fdr_target=0.05
 )
 
 plt = density(posterior_ms["posterior_ms_coefs"][1, :], label=false)
@@ -442,69 +505,4 @@ classification_metrics.wrapper_metrics(
 
 boxplot(point_ms_coefs[:, 1])
 
-
-# >>>>>>>>>>>>>>>> Manual training loop <<<<<<<<<<<<<<<<<
-
-# Define objective
-variational_objective = Turing.Variational.ELBO()
-
-# Optimizer
-optimizer = Turing.Variational.DecayedADAGrad()
-optimizer = DecayedADAGrad()
-optimizer = Flux.Adam(0.001)
-
-# VI algorithm
-num_steps = 1000
-samples_per_step = 1
-# alg = AdvancedVI.ADVI(samples_per_step, num_steps, adtype=ADTypes.AutoTracker())
-alg = AdvancedVI.ADVI(samples_per_step, num_steps, adtype=ADTypes.AutoZygote())
-
-# --- Train loop ---
-converged = false
-step = 1
-theta = randn32(num_weights) * 0.1f0
-elbo_trace = zeros32(num_steps)
-
-prog = ProgressMeter.Progress(num_steps, 1)
-diff_results = DiffResults.GradientResult(theta)
-
-while (step ≤ num_steps) && !converged
-    # 1. Compute gradient and objective value; results are stored in `diff_results`
-    AdvancedVI.grad!(variational_objective, alg, getq, log_joint, theta, diff_results, samples_per_step)
-
-    # vo(theta) = -variational_objective(alg, getq(theta), log_joint, samples_per_step)
-    
-    # loss, grads = Zygote.withgradient(theta) do params
-    #     vo(params)
-    # end
-    # Flux.Optimise.update!(optimizer, theta, grads[1])
-    # apply!(optimizer, theta, grads[1])
-    # @. theta = theta - grads[1]
-
-    # # 2. Extract gradient from `diff_result`
-    gradient_step = DiffResults.gradient(diff_results)
-
-    # # 3. Apply optimizer, e.g. multiplying by step-size
-    diff_grad = apply!(optimizer, theta, gradient_step)
-
-    # 4. Update parameters
-    @. theta = theta - diff_grad
-
-    # 5. Do whatever analysis you want - Store ELBO value
-    elbo_trace[step] = AdvancedVI.elbo(alg, getq(theta), log_joint, samples_per_step)
-
-    step += 1
-
-    ProgressMeter.next!(prog)
-end
-
-plot(elbo_trace, label="ELBO")
-plot(elbo_trace[100:num_steps], label="ELBO")
-
-q = getq(theta)
-samples = rand(q, 2000)
-size(samples)
-
-
 #########
-
