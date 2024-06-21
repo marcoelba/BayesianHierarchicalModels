@@ -36,7 +36,7 @@ n_total = n_individuals * n_per_ind
 
 # tot covariates
 p = 1000
-prop_non_zero = 0.05
+prop_non_zero = 0.025
 p1 = Int(p * prop_non_zero)
 p0 = p - p1
 
@@ -46,10 +46,19 @@ d = 2
 
 data_dict = generate_mixed_model_data(;
     n_individuals=n_individuals, n_time_points=n_per_ind, p=p, p1=p1, p0=p0,
-    include_random_int=true, random_intercept_sd=0.3,
-    include_random_time=true, random_time_sd=0.5,
+    include_random_int=true, random_intercept_sd=1,
+    include_random_time=true, random_time_sd=1,
     include_random_slope=false
 )
+
+cor(data_dict["y"], dims=1)
+mean(cor(data_dict["y"], dims=2), dims=1)
+
+# Check ESS
+println(Turing.ess(data_dict["y"], kind=:basic))
+println(Turing.ess(data_dict["y"][1, :], kind=:basic))
+println(Turing.ess(data_dict["y"][:, 1], kind=:basic))
+println(Turing.ess(reshape(data_dict["y"], (n_individuals*n_per_ind)), kind=:basic))
 
 
 @model function longitudinal_model(y, Xfix)
@@ -352,94 +361,125 @@ num_weights = num_params * 2
 half_num_params = num_params
 
 function getq(theta::AbstractArray{Float32})
-    # Distributions.MultivariateNormal(
-    #     theta[1:half_num_params],
-    #     StatsFuns.softplus.(theta[half_num_params+1:half_num_params*2])
-    # )
-    mu_vec = theta[1:half_num_params]
-    sigma_vec = StatsFuns.softplus.(theta[half_num_params+1:half_num_params*2])
+    Distributions.MultivariateNormal(
+        theta[1:half_num_params],
+        StatsFuns.softplus.(theta[half_num_params+1:half_num_params*2])
+    )
 
-    Turing.arraydist([
-        Normal(mu_vec[w], sigma_vec[w]) for w in range(1, num_params)
-    ])
+    # mu_vec = theta[1:half_num_params]
+    # sigma_vec = StatsFuns.softplus.(theta[(half_num_params+1):(half_num_params*2)])
+
+    # Turing.DistributionsAD.arraydist([
+    #     Normal(mu_vec[w], sigma_vec[w]) for w in range(1, num_params)
+    # ])
 end
 
 q = getq(ones32(num_weights))
-size(q)
+rand(q)
+
+
+###
+f(ttt) = -variational_objective(alg, getq(ttt), log_joint, 1000)
+f(zeros32(num_weights))
+y, back = Zygote.pullback(f, zeros32(num_weights)*0.6f0)
+dy = first(back(1.0))
+
+###
 
 # >>>>>>>>>>>>>>>> Manual training loop <<<<<<<<<<<<<<<<<
-
-# Define objective
-variational_objective = Turing.Variational.ELBO()
-
-# Optimizer
-optimizer = DecayedADAGrad()
-# optimizer = Flux.Adam(0.001)
-
-# VI algorithm
 num_steps = 2000
 samples_per_step = 5
-alg = AdvancedVI.ADVI(samples_per_step, num_steps, adtype=ADTypes.AutoZygote())
 
-# --- Train loop ---
-converged = false
-step = 1
-theta = randn32(num_weights) * 0.2f0
-elbo_trace = zeros32(num_steps)
+n_runs = 5
+elbo_trace = zeros32(num_steps, n_runs)
 theta_trace = zeros32(num_steps, num_weights)
+posteriors = Dict()
 
-prog = ProgressMeter.Progress(num_steps, 1)
-diff_results = DiffResults.GradientResult(theta)
+for chain in range(1, n_runs)
 
-while (step ≤ num_steps) && !converged
-    # 1. Compute gradient and objective value; results are stored in `diff_results`
-    AdvancedVI.grad!(variational_objective, alg, getq, log_joint, theta, diff_results, samples_per_step)
+    println("Chain number: ", chain)
 
-    # vo(theta) = -variational_objective(alg, getq(theta), log_joint, samples_per_step)
-    
-    # loss, grads = Zygote.withgradient(theta) do params
-    #     vo(params)
-    # end
-    # Flux.Optimise.update!(optimizer, theta, grads[1])
-    # apply!(optimizer, theta, grads[1])
-    # @. theta = theta - grads[1]
+    # Define objective
+    variational_objective = Turing.Variational.ELBO()
 
-    # # 2. Extract gradient from `diff_result`
-    gradient_step = DiffResults.gradient(diff_results)
+    # Optimizer
+    optimizer = DecayedADAGrad()
+    # optimizer = Flux.Adam(0.001)
 
-    # # 3. Apply optimizer, e.g. multiplying by step-size
-    diff_grad = apply!(optimizer, theta, gradient_step)
+    # VI algorithm
+    alg = AdvancedVI.ADVI(samples_per_step, num_steps, adtype=ADTypes.AutoZygote())
 
-    # 4. Update parameters
-    @. theta = theta - diff_grad
+    # --- Train loop ---
+    converged = false
+    step = 1
+    theta = randn32(num_weights) * 0.5f0
 
-    # 5. Do whatever analysis you want - Store ELBO value
-    elbo_trace[step] = AdvancedVI.elbo(alg, getq(theta), log_joint, samples_per_step)
-    theta_trace[step, :] = deepcopy(theta)
+    prog = ProgressMeter.Progress(num_steps, 1)
+    diff_results = DiffResults.GradientResult(theta)
 
-    step += 1
+    while (step ≤ num_steps) && !converged
+        # 1. Compute gradient and objective value; results are stored in `diff_results`
+        AdvancedVI.grad!(variational_objective, alg, getq, log_joint, theta, diff_results, samples_per_step)
 
-    ProgressMeter.next!(prog)
+        # vo(theta) = -variational_objective(alg, getq(theta), log_joint, samples_per_step)
+        
+        # loss, grads = Zygote.withgradient(theta) do params
+        #     vo(params)
+        # end
+        # Flux.Optimise.update!(optimizer, theta, grads[1])
+        # apply!(optimizer, theta, grads[1])
+        # @. theta = theta - grads[1]
+
+        # # 2. Extract gradient from `diff_result`
+        gradient_step = DiffResults.gradient(diff_results)
+
+        # # 3. Apply optimizer, e.g. multiplying by step-size
+        diff_grad = apply!(optimizer, theta, gradient_step)
+
+        # 4. Update parameters
+        @. theta = theta - diff_grad
+
+        # 5. Do whatever analysis you want - Store ELBO value
+        elbo_trace[step, chain] = AdvancedVI.elbo(alg, getq(theta), log_joint, samples_per_step)
+        # theta_trace[step, :] = deepcopy(theta)
+
+        step += 1
+
+        ProgressMeter.next!(prog)
+    end
+
+    q = getq(theta)
+    posteriors["$(chain)"] = q
+
 end
 
 plot(elbo_trace, label="ELBO")
-plot(elbo_trace[300:num_steps], label="ELBO")
+plot(elbo_trace[300:num_steps, :], label="ELBO")
 
 plot(theta_trace[:, 2:10], label=false)
 plot(theta_trace[:, 100:110], label=false)
 
-q = getq(theta)
-samples = rand(q, 2000)
-size(samples)
 
+plt = plot()
+for pp in range(1, n_runs)
+    samples = rand(posteriors["$(pp)"], 2000)
+
+    plt = scatter!(posterior_summary(samples, "beta_fixed", params_dict; fun=mean))
+end
+display(plt)
+
+plt = plot()
+for pp in range(1, n_runs)
+    samples = rand(posteriors["$(pp)"], 2000)
+    plt = scatter!(posterior_summary(samples, "gamma_logit", params_dict; fun=mean))
+end
+display(plt)
 
 histogram_posterior(samples, "sigma_y", params_dict)
 
 density_posterior(samples, "beta_fixed", params_dict; plot_label=false)
-scatter(posterior_summary(samples, "beta_fixed", params_dict; fun=mean))
 
 density_posterior(samples, "gamma_logit", params_dict; plot_label=false)
-scatter(posterior_summary(samples, "gamma_logit", params_dict; fun=mean))
 
 histogram_posterior(samples, "sigma_slab", params_dict; plot_label=false)
 
@@ -452,12 +492,21 @@ density_posterior(samples, "beta_time", params_dict; plot_label=false)
 density_posterior(samples, "beta0_random", params_dict; plot_label=false)
 
 boxplot(vec(samples[params_dict["beta0_random"]["from"]:params_dict["beta0_random"]["to"], :]))
+    
 
+
+
+inclusion_probs = zeros(p, n_runs)
+for chain in range(1, n_runs)
+    samples = rand(posteriors["$(chain)"], 2000)
+    inclusion_probs[:, chain] = posterior_summary(samples, "gamma_logit", params_dict; fun=mean)[:,1]
+end
+median_inc_prob = median(inclusion_probs, dims=2)[:, 1]
 
 # FDR
 classification_metrics.wrapper_metrics(
     data_dict["beta_fixed"] .!= 0.,
-    posterior_summary(samples, "gamma_logit", params_dict; fun=mean)[:,1] .> 0.5
+    median_inc_prob .> 0.5
 )
 
 # Mirror Statistic - FDR control
@@ -465,11 +514,13 @@ beta_post = samples[params_dict["beta_fixed"]["from"]:params_dict["beta_fixed"][
 gamma_post = params_dict["gamma_logit"]["bij"].(samples[params_dict["gamma_logit"]["from"]:params_dict["gamma_logit"]["to"], :])
 sigma_slab_post = params_dict["sigma_slab"]["bij"].(samples[params_dict["sigma_slab"]["from"], :])
 
-sigma_slab_mean = mean(sigma_slab_post)
+sigma_slab_mean = mean(std(beta_post, dims=2))
+mean(sigma_slab_post)
 gamma_mean = mean(gamma_post, dims=2)
 
 beta_ss_post = (Random.randn(p, 2000) .* sigma_slab_mean) .* (gamma_mean .< 0.5) .+ 
     beta_post .* (gamma_mean .>= 0.5)
+
 
 plt = density(beta_ss_post[1, :], label=false)
 for j in range(2, p0)
@@ -482,7 +533,7 @@ display(plt)
 
 posterior_ms = posterior_mirror_stat(
     beta_ss_post,
-    fdr_target=0.1
+    fdr_target=0.05
 )
 
 posterior_ms = posterior_mirror_stat(
