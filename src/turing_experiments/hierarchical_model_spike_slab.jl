@@ -357,31 +357,31 @@ log_joint(theta_hat)
 
 # Here MeanField approximation
 # theta is the parameter vector in the unconstrained space
-num_weights = num_params * 2
-half_num_params = num_params
+dim_q = num_params * 2
+half_dim_q = num_params
 
 function getq(theta::AbstractArray{Float32})
-    Distributions.MultivariateNormal(
-        theta[1:half_num_params],
-        StatsFuns.softplus.(theta[half_num_params+1:half_num_params*2])
-    )
+    # Distributions.MultivariateNormal(
+    #     theta[1:half_num_params],
+    #     StatsFuns.softplus.(theta[half_num_params+1:half_num_params*2])
+    # )
 
-    # mu_vec = theta[1:half_num_params]
-    # sigma_vec = StatsFuns.softplus.(theta[(half_num_params+1):(half_num_params*2)])
+    mu_vec = theta[1:half_dim_q]
+    sigma_vec = StatsFuns.softplus.(theta[(half_dim_q+1):(half_dim_q*2)])
 
-    # Turing.DistributionsAD.arraydist([
-    #     Normal(mu_vec[w], sigma_vec[w]) for w in range(1, num_params)
-    # ])
+    Turing.DistributionsAD.arraydist([
+        Normal(mu_vec[w], sigma_vec[w]) for w in range(1, num_params)
+    ])
 end
 
-q = getq(ones32(num_weights))
+q = getq(ones32(dim_q))
 rand(q)
 
 
 ###
 f(ttt) = -variational_objective(alg, getq(ttt), log_joint, 1000)
-f(zeros32(num_weights))
-y, back = Zygote.pullback(f, zeros32(num_weights)*0.6f0)
+f(zeros32(dim_q))
+y, back = Zygote.pullback(f, zeros32(dim_q)*0.6f0)
 dy = first(back(1.0))
 
 ###
@@ -392,7 +392,7 @@ samples_per_step = 5
 
 n_runs = 5
 elbo_trace = zeros32(num_steps, n_runs)
-theta_trace = zeros32(num_steps, num_weights)
+theta_trace = zeros32(num_steps, dim_q)
 posteriors = Dict()
 
 for chain in range(1, n_runs)
@@ -412,7 +412,7 @@ for chain in range(1, n_runs)
     # --- Train loop ---
     converged = false
     step = 1
-    theta = randn32(num_weights) * 0.5f0
+    theta = randn32(dim_q) * 0.5f0
 
     prog = ProgressMeter.Progress(num_steps, 1)
     diff_results = DiffResults.GradientResult(theta)
