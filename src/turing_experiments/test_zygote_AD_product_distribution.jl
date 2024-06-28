@@ -38,6 +38,7 @@ function get_q_multivariate(theta::AbstractArray{<:Real})
     )
 end
 
+
 function get_q_product(theta::AbstractArray{<:Real})
     mu_vec = theta[1:half_n_params]
     sigma_vec = StatsFuns.softplus.(theta[(half_n_params+1):n_params])
@@ -47,13 +48,61 @@ function get_q_product(theta::AbstractArray{<:Real})
     ])
 end
 
+
+# ----------- Defining q via Bijectors -----------
+dists = []
+for jj = 1:p
+    push!(dists, Normal())
+end
+
+ranges = []
+idx = 1
+
+for i = 1:length(dists)
+    d = dists[i]
+    push!(ranges, idx:idx + length(d) - 1)
+    # global idx
+    idx += length(d)
+end
+
+# Base distribution; mean-field normal
+num_params = ranges[end][end]
+base_dist = Turing.DistributionsAD.TuringDiagMvNormal(zeros(num_params), ones(num_params))
+
+# Construct the constrained transform
+to_constrained_bij = Bijectors.bijector.(dists)
+# stacked bijectors
+stack_con_bij = Bijectors.Stacked(to_constrained_bij, ranges)
+
+# Construct the inverse
+to_unconstrained_bij = Bijectors.inverse.(to_constrained_bij)
+# stacked bijectors
+stack_ucon_bij = Bijectors.Stacked(to_unconstrained_bij, ranges)
+
+# transformed bsae dist
+t_base_dist = Bijectors.transformed(base_dist, sb)
+rand(t_base_dist)
+
+
+function get_q_bijector(theta::AbstractArray{<:Real})
+    mu_vec = theta[1:half_n_params]
+    sigma_vec = StatsFuns.softplus.(theta[(half_n_params+1):n_params])
+
+    # Define full transformation to constrained space
+    full_inv_bj = stack_con_bij ∘ Bijectors.Shift(mu_vec) ∘ Bijectors.Scale(sigma_vec)
+
+    return Bijectors.transformed(base_dist, full_inv_bj)
+end
+
 q_multivariate = get_q_multivariate(theta)
 q_product = get_q_product(theta)
+q_bijector = get_q_bijector(theta)
 
 entropy(q_multivariate)
 # 10.743385604419704
 entropy(q_product)
 # 10.743385604419705
+entropy(q_bijector.dist) + Bijectors.with_logabsdet_jacobian(q_bijector.transform, rand(q_bijector))[2]
 
 # Define objective
 variational_objective = Turing.Variational.ELBO()
@@ -90,6 +139,20 @@ print(dy_m)
 
 elbo_m(ones(p*2))
 elbo_m(ones(p*2) * 0.5)
+
+
+# with Bijector dist
+f_bijector(t) = -variational_objective(alg, get_q_bijector(t), log_joint, MC_samples)
+
+f_bijector(vcat(zeros(p), ones(p)))
+f_bijector(vcat(ones(p), ones(p)))
+f_bijector(test_theta)
+
+f_b, back = Zygote.pullback(f_bijector, test_theta)
+print(f_b)
+dy_b = first(back(1.0))stack_con_bij
+print(dy_b)
+
 
 # With arraydist
 f_product(t) = -variational_objective(alg, get_q_product(t), log_joint, MC_samples)
