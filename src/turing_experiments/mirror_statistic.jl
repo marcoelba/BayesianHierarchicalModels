@@ -24,7 +24,7 @@ function get_t(mirror_coeffs; fdr_q=0.1)
 end
 
 
-function posterior_mirror_stat(posterior_samples; fdr_target=0.1)
+function posterior_ms_coefficients(posterior_samples)
     p = size(posterior_samples)[1]
     mc_samples = Int(size(posterior_samples)[2] / 2)
     posterior_ms_coefs = zeros(p, mc_samples)
@@ -34,13 +34,30 @@ function posterior_mirror_stat(posterior_samples; fdr_target=0.1)
             abs.(posterior_samples[param, 1:mc_samples] .- posterior_samples[param, (mc_samples + 1):(mc_samples * 2)])
         posterior_ms_coefs[param, :] = mirror_coeffs
     end
+    
+    return posterior_ms_coefs
+end
 
-    # Get inclusion for each MC sample
+
+function posterior_inclusion(posterior_ms_coefs; fdr_target=0.1)
     posterior_ms_inclusion = zeros(size(posterior_ms_coefs))
+    mc_samples = size(posterior_ms_coefs)[2]
+
     for mc in range(1, mc_samples)
         opt_t_mc = get_t(posterior_ms_coefs[:, mc], fdr_q=fdr_target)
         posterior_ms_inclusion[:, mc] = posterior_ms_coefs[:, mc] .> opt_t_mc
     end
+
+    return posterior_ms_inclusion
+end
+
+
+function posterior_mirror_stat(posterior_samples; fdr_target=0.1)
+
+    posterior_ms_coefs = posterior_ms_coefficients(posterior_samples)
+
+    # Get inclusion for each MC sample
+    posterior_ms_inclusion = posterior_inclusion(posterior_ms_coefs; fdr_target=fdr_target)
 
     return Dict("posterior_ms_coefs" => posterior_ms_coefs, "posterior_ms_inclusion" => posterior_ms_inclusion)
 end
