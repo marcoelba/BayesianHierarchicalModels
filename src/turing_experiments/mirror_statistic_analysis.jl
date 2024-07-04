@@ -89,10 +89,11 @@ p1 = 100
 p = p0 + p1
 
 mc_samples = 1000
+fdr_target = 0.1
 
 Random.seed!(35)
 
-posterior_mean_null = randn(p0) * 0. .+ 0.
+posterior_mean_null = randn(p0) * 0.1
 posterior_mean_active = randn(p1) * 0.1 .+ 1.5
 posterior_mean = vcat(posterior_mean_null, posterior_mean_active)
 
@@ -100,21 +101,29 @@ posterior_std_null = randn(p0) * 0.01 .+ 0.1
 posterior_std_active = randn(p1) * 0.01 .+ 0.1
 posterior_std = vcat(posterior_std_null, posterior_std_active)
 
+posterior_gamma = vcat(
+    ones(p0) * 0.01,
+    ones(p1) * 0.9
+)
+
+weighted_posterior_mean = posterior_mean .* posterior_gamma
+scatter(weighted_posterior_mean)
+
 posterior = arraydist([
-    Normal(mu, sd) for (mu, sd) in zip(posterior_mean, posterior_std)
+    Normal(mu, sd) for (mu, sd) in zip(weighted_posterior_mean, posterior_std)
 ])
 
 # null posteriors
 plt = plot()
 for pp = 1:p0
-    plt = density!(rand(Normal(posterior_mean_null[pp], posterior_std_null[pp]), mc_samples), label=false)
+    plt = density!(rand(Normal(weighted_posterior_mean[pp], posterior_std_null[pp]), 1000), label=false)
 end
 display(plt)
 
 # non-null
 plt = plot()
 for pp = p0:p
-    plt = density!(rand(Normal(posterior_mean[pp], posterior_std[pp]), mc_samples), label=false)
+    plt = density!(rand(Normal(weighted_posterior_mean[pp], posterior_std[pp]), mc_samples), label=false)
 end
 display(plt)
 
@@ -124,15 +133,9 @@ for nn = 1:mc_samples
     beta_1 = rand(posterior)
     beta_2 = rand(posterior)
 
-    # scatter(beta_1, label="beta 1")
-    # scatter!(beta_2, label="beta 2")
+    mirror_coeffs = MirrorStatistic.mirror_statistic(beta_1, beta_2)
 
-    mirror_coeffs = abs.(beta_1 .+ beta_2) .- 
-        abs.(beta_1 .- beta_2)
-
-    scatter!(mirror_coeffs, label="MC")
-
-    opt_t = get_t(mirror_coeffs; fdr_q=0.05)
+    opt_t = MirrorStatistic.get_t(mirror_coeffs; fdr_q=fdr_target)
     output[nn] = sum(mirror_coeffs .> opt_t)
 end
 
@@ -140,6 +143,7 @@ mean(output)
 std(output)
 
 histogram(output)
+
 
 # Simulation with two point estimates (like LASSO + OLS)
 p0 = 900

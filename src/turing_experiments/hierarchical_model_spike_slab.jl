@@ -342,7 +342,7 @@ rand(q)
 num_steps = 2000
 samples_per_step = 5
 
-n_runs = 3
+n_runs = 2
 elbo_trace = zeros32(num_steps, n_runs)
 theta_trace = zeros32(num_steps, dim_q)
 posteriors = Dict()
@@ -458,6 +458,51 @@ classification_metrics.wrapper_metrics(
     data_dict["beta_fixed"] .!= 0.,
     mean_inc_prob .> 0.5
 )
+
+# ------ Mirror Statistic ------
+
+# Retrieve the Posterior distributions of the betas
+posterior_beta_mean = posteriors["1"].μ[params_dict["beta_fixed"]["from"]:params_dict["beta_fixed"]["to"]]
+posterior_beta_sigma = sqrt.(posteriors["1"].Σ.diag[params_dict["beta_fixed"]["from"]:params_dict["beta_fixed"]["to"]])
+scatter(posterior_beta_mean)
+
+weighted_posterior_beta_mean = posterior_beta_mean .* mean_inc_prob
+
+# Variational distribution is a Gaussian
+posterior_beta = MultivariateNormal(
+    weighted_posterior_beta_mean,
+    posterior_beta_sigma
+)
+
+mc_samples = 2000
+fdr_target = 0.1
+
+fdr_distribution = zeros(mc_samples)
+tpr_distribution = zeros(mc_samples)
+
+for nn = 1:mc_samples
+    beta_1 = rand(posterior_beta)
+    beta_2 = rand(posterior_beta)
+
+    mirror_coeffs = MirrorStatistic.mirror_statistic(beta_1, beta_2)
+
+    opt_t = MirrorStatistic.get_t(mirror_coeffs; fdr_q=fdr_target)
+    n_selected = sum(mirror_coeffs .> opt_t)
+
+    metrics = classification_metrics.wrapper_metrics(
+        data_dict["beta_fixed"] .!= 0.,
+        mirror_coeffs .> opt_t
+    )
+    
+    fdr_distribution[nn] = metrics.fdr
+    tpr_distribution[nn] = metrics.tpr
+end
+
+mean(fdr_distribution)
+mean(tpr_distribution)
+
+histogram(fdr_distribution)
+histogram(tpr_distribution)
 
 
 # Regression coefficients

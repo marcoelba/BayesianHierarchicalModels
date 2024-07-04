@@ -1,9 +1,11 @@
 # Mirror statistic
+module MirrorStatistic
+
 using Turing
 using Random
 
 
-function get_t(mirror_coeffs; fdr_q=0.1)
+function get_t(mirror_coeffs; fdr_q)
     
     optimal_t = 0
     t = 0
@@ -21,6 +23,17 @@ function get_t(mirror_coeffs; fdr_q=0.1)
         end
     end
     return optimal_t    
+end
+
+
+function mirror_statistic(theta_1, theta_2; type=1)
+    if type == 1
+        ms = abs.(theta_1 .+ theta_2) .- abs.(theta_1 .- theta_2)
+    elseif type == 2
+        ms = sign.(theta_1 .* theta_2) .* (abs(theta_1) .+ abs(theta_2))
+    end
+
+    return ms
 end
 
 
@@ -60,4 +73,6 @@ function posterior_mirror_stat(posterior_samples; fdr_target=0.1)
     posterior_ms_inclusion = posterior_inclusion(posterior_ms_coefs; fdr_target=fdr_target)
 
     return Dict("posterior_ms_coefs" => posterior_ms_coefs, "posterior_ms_inclusion" => posterior_ms_inclusion)
+end
+
 end
