@@ -2,11 +2,12 @@
 using Distributions
 using Random
 using LinearAlgebra
+using ToeplitzMatrices
 
 
 function generate_mixed_model_data(;
     n_individuals, n_time_points,
-    p, p1, p0, beta_pool=Float32.([-1., -2., 1, 2]), obs_noise_sd=1.,
+    p, p1, p0, beta_pool=Float32.([-1., -2., 1, 2]), obs_noise_sd=1., corr_factor=0.5,
     include_random_int=true, random_intercept_sd=0.3,
     include_random_time=true, random_time_sd=0.5,
     include_random_slope=false, p_random_covs=0, random_slope_sd=0.5,
@@ -19,7 +20,16 @@ function generate_mixed_model_data(;
 
     # > FIXED EFFETCS <
     # Fixed effects, baseline covariates (DO NOT change over time)
-    Xfix = Random.randn(n_individuals, p)
+    # block covariance matrix
+    cor_coefs_0 = vcat([1.], [corr_factor * (p0 - ll) / (p0 - 1) for ll in range(1, p0-1)])
+    cor_coefs_1 = vcat([1.], [corr_factor * (p1 - ll) / (p1 - 1) for ll in range(1, p1-1)])
+    cov_matrix_0 = Array(Toeplitz(cor_coefs_0, cor_coefs_0))
+    cov_matrix_1 = Array(Toeplitz(cor_coefs_1, cor_coefs_1))
+
+    Xfix_0 = rand(MultivariateNormal(cov_matrix_0), n_individuals)
+    Xfix_1 = rand(MultivariateNormal(cov_matrix_1), n_individuals)
+    Xfix = transpose(vcat(Xfix_0, Xfix_1))
+
     data_dict["Xfix"] = dtype.(Xfix)
 
     # Fixed Coeffcients

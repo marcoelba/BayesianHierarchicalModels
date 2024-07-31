@@ -22,7 +22,7 @@ include(joinpath("decayed_ada_grad.jl"))
 include(joinpath("mixed_models_data_generation.jl"))
 include(joinpath("mirror_statistic.jl"))
 include(joinpath("gaussian_spike_slab.jl"))
-include(joinpath("relaxed_bernoulli.jl"))
+include(joinpath("../mixed_models/relaxed_bernoulli.jl"))
 include(joinpath("plot_functions.jl"))
 include(joinpath("../utils/classification_metrics.jl"))
 
@@ -30,7 +30,7 @@ include(joinpath("../utils/classification_metrics.jl"))
 # Generate hierarchical model data
 # groups are the individuals (patients)
 n_individuals = 200
-n_per_ind = 10
+n_per_ind = 5
 
 n_total = n_individuals * n_per_ind
 
@@ -39,15 +39,17 @@ p = 1000
 prop_non_zero = 0.05
 p1 = Int(p * prop_non_zero)
 p0 = p - p1
+corr_factor = 0.2
 
 # Covariates with random effects
 d = 2
 
 
 data_dict = generate_mixed_model_data(;
-    n_individuals=n_individuals, n_time_points=n_per_ind, p=p, p1=p1, p0=p0,
-    include_random_int=true, random_intercept_sd=1,
-    include_random_time=true, random_time_sd=1,
+    n_individuals=n_individuals, n_time_points=n_per_ind,
+    p=p, p1=p1, p0=p0, corr_factor=corr_factor,
+    include_random_int=true, random_intercept_sd=0.5,
+    include_random_time=true, random_time_sd=0.5,
     include_random_slope=false
 )
 
@@ -89,10 +91,10 @@ params_dict["gamma_logit"] = OrderedDict("size" => (p), "from" => num_params+1, 
 num_params += p
 prior_gamma_logit = Turing.filldist(LogitRelaxedBernoulli(0.1f0, 0.1f0), p)
 
-prior_probs = vcat(ones32(p0) * 0.1f0, ones32(p1) * 0.9f0)
-prior_gamma_logit = Turing.arraydist([
-    LogitRelaxedBernoulli(prior_probs[jj], 0.1f0) for jj = 1:p
-])
+# prior_probs = vcat(ones32(p0) * 0.1f0, ones32(p1) * 0.9f0)
+# prior_gamma_logit = Turing.arraydist([
+#     LogitRelaxedBernoulli(prior_probs[jj], 0.1f0) for jj = 1:p
+# ])
 
 log_prior_gamma_logit(gamma_logit::AbstractArray{Float32}) = Distributions.logpdf(prior_gamma_logit, gamma_logit)
 
@@ -198,7 +200,7 @@ end
 
 # Likelihood
 function likelihood(;
-    beta0_fixed::Float32, 
+    beta0_fixed::Float32,
     beta0_random::AbstractArray{Float32},
     beta_fixed::AbstractArray{Float32},
     beta_time::AbstractArray{Float32},
@@ -339,10 +341,10 @@ rand(q)
 
 
 # >>>>>>>>>>>>>>>> Manual training loop <<<<<<<<<<<<<<<<<
-num_steps = 2000
+num_steps = 4000
 samples_per_step = 5
 
-n_runs = 2
+n_runs = 3
 elbo_trace = zeros32(num_steps, n_runs)
 theta_trace = zeros32(num_steps, dim_q)
 posteriors = Dict()
@@ -418,7 +420,7 @@ for pp in range(1, n_runs)
 end
 display(plt)
 
-histogram_posterior(samples, "sigma_y", params_dict)
+histogram_posterior(rand(posteriors["1"], MC_SAMPLES), "sigma_y", params_dict)
 
 density_posterior(samples, "beta_fixed", params_dict; plot_label=false)
 
@@ -435,7 +437,6 @@ density_posterior(samples, "beta_time", params_dict; plot_label=false)
 density_posterior(samples, "beta0_random", params_dict; plot_label=false)
 
 boxplot(vec(samples[params_dict["beta0_random"]["from"]:params_dict["beta0_random"]["to"], :]))
-
 
 
 
@@ -462,25 +463,34 @@ classification_metrics.wrapper_metrics(
 # ------ Mirror Statistic ------
 
 # Retrieve the Posterior distributions of the betas
-posterior_beta_mean = posteriors["1"].μ[params_dict["beta_fixed"]["from"]:params_dict["beta_fixed"]["to"]]
-posterior_beta_sigma = sqrt.(posteriors["1"].Σ.diag[params_dict["beta_fixed"]["from"]:params_dict["beta_fixed"]["to"]])
-scatter(posterior_beta_mean)
+posterior_beta_mean = zeros(p, n_runs)
+posterior_beta_sigma = zeros(p, n_runs)
 
-weighted_posterior_beta_mean = posterior_beta_mean .* mean_inc_prob
+for chain = 1:n_runs
+    posterior_beta_mean[:, chain] = posteriors["$(chain)"].μ[params_dict["beta_fixed"]["from"]:params_dict["beta_fixed"]["to"]]
+    posterior_beta_sigma[:, chain] = sqrt.(posteriors["$(chain)"].Σ.diag[params_dict["beta_fixed"]["from"]:params_dict["beta_fixed"]["to"]])
+end
+
+scatter(posterior_beta_mean)
+scatter!(mean(posterior_beta_mean, dims=2))
+
+weighted_posterior_beta_mean = mean(posterior_beta_mean, dims=2)[:, 1] .* mean_inc_prob
+weighted_posterior_beta_mean = mean(posterior_beta_mean, dims=2)[:, 1] .* median_inc_prob
 
 # Variational distribution is a Gaussian
 posterior_beta = MultivariateNormal(
     weighted_posterior_beta_mean,
-    posterior_beta_sigma
+    maximum(posterior_beta_sigma, dims=2)[:, 1]
 )
 
-mc_samples = 2000
 fdr_target = 0.1
 
-fdr_distribution = zeros(mc_samples)
-tpr_distribution = zeros(mc_samples)
+fdr_distribution = zeros(MC_SAMPLES)
+tpr_distribution = zeros(MC_SAMPLES)
+n_selected_distribution = zeros(MC_SAMPLES)
+selection_matrix = zeros(p, MC_SAMPLES)
 
-for nn = 1:mc_samples
+for nn = 1:MC_SAMPLES
     beta_1 = rand(posterior_beta)
     beta_2 = rand(posterior_beta)
 
@@ -488,6 +498,8 @@ for nn = 1:mc_samples
 
     opt_t = MirrorStatistic.get_t(mirror_coeffs; fdr_q=fdr_target)
     n_selected = sum(mirror_coeffs .> opt_t)
+    n_selected_distribution[nn] = n_selected
+    selection_matrix[:, nn] = (mirror_coeffs .> opt_t) * 1
 
     metrics = classification_metrics.wrapper_metrics(
         data_dict["beta_fixed"] .!= 0.,
@@ -501,106 +513,27 @@ end
 mean(fdr_distribution)
 mean(tpr_distribution)
 
-histogram(fdr_distribution)
-histogram(tpr_distribution)
+histogram(n_selected_distribution, label="FDR", normalize=:probability)
+minimum(n_selected_distribution)
+argmin(n_selected_distribution)
 
-
-# Regression coefficients
-beta_samples = []
-for chain in range(1, n_runs)
-    push!(
-        beta_samples,
-        rand(posteriors["$(chain)"], MC_SAMPLES)[params_dict["beta_fixed"]["from"]:params_dict["beta_fixed"]["to"], :]
-    )
-end
-
-# Make posterior based on inclusion probabilities
-beta_posterior_in = zeros32(p, MC_SAMPLES)
-beta_included = zeros32(p)
-for chain = 1:n_runs
-    which_in = (mean_inc_prob .> 0.5) .& (inclusion_probs[:, chain] .> 0.5)
-    beta_posterior_in[which_in, :] .+= beta_samples[chain][which_in, :]
-    beta_included .+= which_in
-end
-beta_included[beta_included .== 0] .= 1
-beta_posterior_in ./= beta_included
-
-
-beta_posterior_out = zeros32(p, MC_SAMPLES)
-beta_excluded = zeros32(p)
-for chain = 1:n_runs
-    which_out = (mean_inc_prob .<= 0.5) .& (inclusion_probs[:, chain] .<= 0.5)
-    beta_posterior_out[which_out, :] .+= beta_samples[chain][which_out, :]
-    beta_excluded .+= which_out
-end
-beta_excluded[beta_excluded .== 0] .= 1
-beta_posterior_out ./= beta_excluded
-
-beta_posterior = beta_posterior_in .+ beta_posterior_out
-
-density(beta_posterior[1, :])
-density!(beta_posterior[1, :] * mean_inc_prob[1])
-
-density(beta_posterior[p-2, :])
-density!(beta_posterior[p-2, :] * mean_inc_prob[p-2])
-
-posterior_ms = posterior_mirror_stat(
-    beta_posterior,
-    fdr_target=0.1
-)
-point_ms_coefs = mean(posterior_ms["posterior_ms_inclusion"], dims=2)
-
-classification_metrics.wrapper_metrics(
-    data_dict["beta_fixed"] .!= 0,
-    point_ms_coefs[:, 1] .> 0.5
+sum(mean(selection_matrix, dims=2) .> 0.5)
+findall(>(0.5), mean(selection_matrix, dims=2)[:, 1])
+metrics = classification_metrics.wrapper_metrics(
+    data_dict["beta_fixed"] .!= 0.,
+    mean(selection_matrix, dims=2)[:, 1] .> 0.5
 )
 
-# scaling down the mean given the inclusion prob
-posterior_mean = mean(beta_posterior, dims=2)
-beta_posterior[mean_inc_prob .<= 0.5, :] .= beta_posterior[mean_inc_prob .<= 0.5, :] .- posterior_mean[mean_inc_prob .<= 0.5]
-beta_posterior[mean_inc_prob .<= 0.5, :] .+= posterior_mean[mean_inc_prob .<= 0.5] .* mean_inc_prob[mean_inc_prob .<= 0.5]
-
-posterior_ms = posterior_mirror_stat(
-    beta_posterior,
-    fdr_target=0.1
-)
-point_ms_coefs = mean(posterior_ms["posterior_ms_inclusion"], dims=2)
-
-classification_metrics.wrapper_metrics(
-    data_dict["beta_fixed"] .!= 0,
-    point_ms_coefs[:, 1] .> 0.5
+findall(!=(0), selection_matrix[:, argmin(n_selected_distribution)])
+metrics = classification_metrics.wrapper_metrics(
+    data_dict["beta_fixed"] .!= 0.,
+    selection_matrix[:, argmin(n_selected_distribution)] .!= 0
 )
 
 
-plt = plot()
-for pp in range(p0+1, p)
-    plt = density!(beta_posterior[pp, :], label=false)
-end
-display(plt)
+abs_project_path = normpath(joinpath(@__FILE__, "..", "..", ".."))
 
-plt = plot()
-for pp in range(1, p0)
-    plt = density!(beta_posterior[pp, :], label=false)
-end
-display(plt)
+fdr_plot = histogram(fdr_distribution, label="FDR", normalize=:probability)
+# savefig(fdr_plot, joinpath(abs_project_path, "results", "ms_analysis", "bayesian_fdr.pdf"))
 
-scatter(point_ms_coefs[:, 1], label=false)
-selection = findall(>(0.5), point_ms_coefs[:, 1])
-
-plt = plot()
-for pp in selection
-    plt = density!(beta_posterior[pp, :], label=false)
-end
-display(plt)
-
-plt = plot()
-for pp in selection
-    plt = density!(posterior_ms["posterior_ms_coefs"][pp, :], label=false)
-end
-display(plt)
-
-plt = plot()
-for pp in 1:20
-    plt = density!(posterior_ms["posterior_ms_coefs"][pp, :], label=false)
-end
-display(plt)
+tpr_plot = histogram(tpr_distribution, label="TPR", normalize=:probability)
