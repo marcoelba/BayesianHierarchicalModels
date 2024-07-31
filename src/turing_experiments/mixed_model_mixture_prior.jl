@@ -138,17 +138,6 @@ function log_prior_beta_fixed(
     sum(log.(s) .+ offset)
 end
 
-# Random effects
-# params_dict["beta_random"] = OrderedDict("size" => (p, n_groups), "from" => num_params+1, "to" => num_params + p*n_groups, "bij" => identity)
-# num_params += p*n_groups
-# function log_prior_beta_random(beta_overall, beta_random)
-#     Distributions.logpdf(
-#         Turing.filldist(
-#             Distributions.MultivariateNormal(beta_overall, 1.), n_groups
-#         ),
-#         beta_random
-#     )
-# end
 
 # Intercept
 params_dict["beta0_fixed"] = OrderedDict("size" => (1), "from" => num_params+1, "to" => num_params + 1, "bij" => identity)
@@ -161,29 +150,21 @@ num_params += 1
 prior_sigma_beta0 = truncated(Normal(0f0, 1f0), 0f0, Inf)
 log_prior_sigma_beta0(sigma_beta0::Float32) = Distributions.logpdf(prior_sigma_beta0, sigma_beta0)
 
-# Random Intercept
-params_dict["beta0_random"] = OrderedDict("size" => (n_individuals), "from" => num_params+1, "to" => num_params + n_individuals, "bij" => identity)
-num_params += n_individuals
-function log_prior_beta0_random(sigma_beta0::Float32, beta0_random::AbstractArray{Float32})
-    Distributions.logpdf(
-        Turing.filldist(Distributions.Normal(0f0, sigma_beta0), n_individuals),
-        beta0_random
-    )
-end
 
 # Mixture prior distribution on random intercept
 n_clusters = 5
 
 # mixing probabilities
 params_dict["beta0_rand_mix_probs"] = OrderedDict(
-    "size" => (n_individuals),
-    "from" => num_params+1, "to" => num_params + n_individuals,
-    "bij" => StatsFuns.logistic
+    "size" => (n_clusters),
+    "from" => num_params + 1, "to" => num_params + n_clusters,
+    "bij" => StatsFuns.softmax
 )
-num_params += n_individuals
+num_params += n_clusters
 log_prior_beta0_rand_mix_probs(x::AbstractArray{<:Float32}) = Distributions.logpdf(
     Distributions.Dirichlet(n_clusters, 1f0), x
 )
+
 # clusters mean
 params_dict["beta0_rand_clusters_mean"] = OrderedDict(
     "size" => (n_clusters),
@@ -195,11 +176,14 @@ log_prior_beta0_rand_clusters_mean(x::AbstractArray{<:Float32}) = Distributions.
     Distributions.MultivariateNormal(zeros32(n_clusters), 1f0), x
 )
 
+params_dict["beta0_random"] = OrderedDict("size" => (n_individuals), "from" => num_params+1, "to" => num_params + n_individuals, "bij" => identity)
+num_params += n_individuals
+
 function log_prior_beta0_random(
     w::AbstractArray{<:Float32},
     mu::AbstractArray{<:Float32},
-    x::AbstractArray{<:Float32};
-    sd::Float32 = 1f0
+    sd::Float32,
+    x::AbstractArray{<:Float32}
     )
 
     w_ext = transpose(w)
@@ -213,22 +197,20 @@ function log_prior_beta0_random(
     sum(log.(s) .+ offset)
 end
 
-function log_prior_beta0_random(
-    w::AbstractArray{<:Float32},
-    mu::AbstractArray{<:Float32},
-    x::Float32;
-    sd::Float32 = 1f0
-    )
+# function log_prior_beta0_random(
+#     w::AbstractArray{<:Float32},
+#     mu::AbstractArray{<:Float32},
+#     x::Float32;
+#     sd::Float32 = 1f0
+#     )
 
-    xstd = -0.5f0 .* ((x .- mu) ./ sd).^2f0
-    wstd = w ./ (sqrt(2f0 .* Float32(pi)) .* sd)
-    offset = maximum(xstd .* wstd, dims=1)
-    xe = exp.(xstd .- offset)
-    s = sum(xe .* wstd, dims=1)
-    sum(log.(s) .+ offset)
-end
-
-# log_prior_beta0_random.(Ref(w), Ref(mu), x)
+#     xstd = -0.5f0 .* ((x .- mu) ./ sd).^2f0
+#     wstd = w ./ (sqrt(2f0 .* Float32(pi)) .* sd)
+#     offset = maximum(xstd .* wstd, dims=1)
+#     xe = exp.(xstd .- offset)
+#     s = sum(xe .* wstd, dims=1)
+#     sum(log.(s) .+ offset)
+# end
 
 
 # Random time component
@@ -326,12 +308,11 @@ function log_joint(theta_hat::AbstractArray{Float32})
     sigma_slab = params_dict["sigma_slab"]["bij"].(params_names.sigma_slab)
     beta_fixed = params_names.beta_fixed
 
-    # beta_random = reshape(
-    #     params_dict["beta_random"]["bij"](theta_hat[params_dict["beta_random"]["from"]:params_dict["beta_random"]["to"]]),
-    #     params_dict["beta_random"]["size"]
-    # )
     beta0_fixed = params_names.beta0_fixed
+
     sigma_beta0 = params_dict["sigma_beta0"]["bij"].(params_names.sigma_beta0)
+    beta0_rand_mix_probs = params_dict["beta0_rand_mix_probs"]["bij"](params_names.beta0_rand_mix_probs)
+    beta0_rand_clusters_mean = params_dict["beta0_rand_clusters_mean"]["bij"].(params_names.beta0_rand_clusters_mean)
     beta0_random = params_names.beta0_random
 
     sigma_beta_time = params_dict["sigma_beta_time"]["bij"].(params_names.sigma_beta_time)
@@ -353,7 +334,9 @@ function log_joint(theta_hat::AbstractArray{Float32})
         log_prior_beta_fixed(gamma, sigma_slab, beta_fixed) +
         log_prior_beta0_fixed(beta0_fixed) +
         log_prior_sigma_beta0(sigma_beta0) +
-        log_prior_beta0_random(sigma_beta0, beta0_random) +
+        log_prior_beta0_rand_mix_probs(beta0_rand_mix_probs) +
+        log_prior_beta0_rand_clusters_mean(beta0_rand_clusters_mean) +
+        log_prior_beta0_random(beta0_rand_mix_probs, beta0_rand_clusters_mean, sigma_beta0, beta0_random) +
         log_prior_sigma_beta_time(sigma_beta_time) +
         log_prior_beta_time(sigma_beta_time, beta_time)
     
@@ -392,7 +375,7 @@ rand(q)
 num_steps = 4000
 samples_per_step = 5
 
-n_runs = 3
+n_runs = 2
 elbo_trace = zeros32(num_steps, n_runs)
 theta_trace = zeros32(num_steps, dim_q)
 posteriors = Dict()
