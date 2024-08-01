@@ -63,6 +63,16 @@ println(Turing.ess(data_dict["y"][:, 1], kind=:basic))
 println(Turing.ess(reshape(data_dict["y"], (n_individuals*n_per_ind)), kind=:basic))
 
 
+function ordered_vector_bij(x)
+    L = length(x)
+    cumsum(vcat(x[1], StatsFuns.softplus.(x[2:L])))
+end
+
+function simplex_bij(x)
+    StatsFuns.softmax(vcat(x, 0f0))
+end
+
+
 """
 Using Variational Inference
 """
@@ -147,7 +157,7 @@ log_prior_beta0_fixed(beta0_fixed::Float32) = Distributions.logpdf(prior_beta0_f
 
 params_dict["sigma_beta0"] = OrderedDict("size" => (1), "from" => num_params+1, "to" => num_params + 1, "bij" => StatsFuns.softplus)
 num_params += 1
-prior_sigma_beta0 = truncated(Normal(0f0, 1f0), 0f0, Inf)
+prior_sigma_beta0 = truncated(Normal(0f0, 0.1f0), 0f0, Inf)
 log_prior_sigma_beta0(sigma_beta0::Float32) = Distributions.logpdf(prior_sigma_beta0, sigma_beta0)
 
 
@@ -156,11 +166,11 @@ n_clusters = 5
 
 # mixing probabilities
 params_dict["beta0_rand_mix_probs"] = OrderedDict(
-    "size" => (n_clusters),
-    "from" => num_params + 1, "to" => num_params + n_clusters,
-    "bij" => StatsFuns.softmax
+    "size" => (n_clusters - 1),
+    "from" => num_params + 1, "to" => num_params + n_clusters -1,
+    "bij" => simplex_bij
 )
-num_params += n_clusters
+num_params += n_clusters - 1
 log_prior_beta0_rand_mix_probs(x::AbstractArray{<:Float32}) = Distributions.logpdf(
     Distributions.Dirichlet(n_clusters, 1f0), x
 )
@@ -169,7 +179,7 @@ log_prior_beta0_rand_mix_probs(x::AbstractArray{<:Float32}) = Distributions.logp
 params_dict["beta0_rand_clusters_mean"] = OrderedDict(
     "size" => (n_clusters),
     "from" => num_params+1, "to" => num_params + n_clusters,
-    "bij" => identity
+    "bij" => ordered_vector_bij
 )
 num_params += n_clusters
 log_prior_beta0_rand_clusters_mean(x::AbstractArray{<:Float32}) = Distributions.logpdf(
@@ -312,7 +322,7 @@ function log_joint(theta_hat::AbstractArray{Float32})
 
     sigma_beta0 = params_dict["sigma_beta0"]["bij"].(params_names.sigma_beta0)
     beta0_rand_mix_probs = params_dict["beta0_rand_mix_probs"]["bij"](params_names.beta0_rand_mix_probs)
-    beta0_rand_clusters_mean = params_dict["beta0_rand_clusters_mean"]["bij"].(params_names.beta0_rand_clusters_mean)
+    beta0_rand_clusters_mean = params_dict["beta0_rand_clusters_mean"]["bij"](params_names.beta0_rand_clusters_mean)
     beta0_random = params_names.beta0_random
 
     sigma_beta_time = params_dict["sigma_beta_time"]["bij"].(params_names.sigma_beta_time)
@@ -342,7 +352,7 @@ function log_joint(theta_hat::AbstractArray{Float32})
     
     loglik + log_prior
 end
-theta_hat = ones32(num_params) * 0.5f0
+theta_hat = rand32(num_params) * 0.5f0
 log_joint(theta_hat)
 
 # Variational Distribution
@@ -358,13 +368,6 @@ function getq(theta::AbstractArray{Float32})
         theta[1:half_dim_q],
         StatsFuns.softplus.(theta[(half_dim_q+1):dim_q])
     )
-
-    # mu_vec = theta[1:half_dim_q]
-    # sigma_vec = StatsFuns.softplus.(theta[(half_dim_q+1):(half_dim_q*2)])
-
-    # Turing.DistributionsAD.arraydist([
-    #     Normal(mu_vec[w], sigma_vec[w]) for w in range(1, num_params)
-    # ])
 end
 
 q = getq(ones32(dim_q))
@@ -397,7 +400,7 @@ for chain in range(1, n_runs)
     # --- Train loop ---
     converged = false
     step = 1
-    theta = randn32(dim_q) * 0.5f0
+    theta = randn32(dim_q) * 0.2f0
 
     prog = ProgressMeter.Progress(num_steps, 1)
     diff_results = DiffResults.GradientResult(theta)

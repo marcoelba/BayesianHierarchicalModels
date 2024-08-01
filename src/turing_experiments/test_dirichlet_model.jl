@@ -132,21 +132,21 @@ end
 log_likelihood(y=x, mu=μ, mix_probs=w, sd=1.)
 
 # Joint
-num_params = 5
+num_params = 6
 
 function log_joint(theta_hat)
 
     mix_probs = StatsFuns.softmax(vcat(theta_hat[1:2], 0.))
     clusters_mean = ordered_vector(theta_hat[3:5])
-    # sd = StatsFuns.softplus(theta_hat[6])
+    sd = StatsFuns.softplus(theta_hat[6])
 
     loglik = log_likelihood(
-        y=x, mu=clusters_mean, mix_probs=mix_probs, sd=1.
+        y=x, mu=clusters_mean, mix_probs=mix_probs, sd=sd
     )
 
     log_prior = logpdf(MvNormal(zeros(K), I), clusters_mean) +
-        logpdf(Dirichlet(K, 1.0), mix_probs)
-        # logpdf(truncated(Normal(0, 0.5), 0, Inf), sd)
+        logpdf(Dirichlet(K, 1.0), mix_probs) +
+        logpdf(truncated(Normal(0, 0.1), 0, Inf), sd)
         
     loglik + log_prior
 end
@@ -189,7 +189,7 @@ alg = AdvancedVI.ADVI(samples_per_step, num_steps, adtype=ADTypes.AutoZygote())
 # --- Train loop ---
 converged = false
 step = 1
-theta = randn32(dim_q) * 0.5f0
+theta = randn32(dim_q) * 0.2f0
 
 prog = ProgressMeter.Progress(num_steps, 1)
 diff_results = DiffResults.GradientResult(theta)
@@ -212,8 +212,8 @@ while (step ≤ num_steps) && !converged
     sample_t = rand(q_temp)
     
     theta_trace[step, 1:2] = StatsFuns.softmax(sample_t[1:2])
-    theta_trace[step, 3:5] = sample_t[3:5]
-    # theta_trace[step, 6] = StatsFuns.softplus(sample_t[6])
+    theta_trace[step, 3:5] = ordered_vector(sample_t[3:5])
+    theta_trace[step, 6] = StatsFuns.softplus(sample_t[6])
 
     elbo_trace[step] = AdvancedVI.elbo(alg, q_temp, log_joint, samples_per_step)
 
@@ -234,3 +234,5 @@ samples = rand(q, 2000)
 density(ordered_vector_matrix(samples[3:5, :])')
 
 density(StatsFuns.softmax(vcat(samples[1:2, :], zeros(1, 2000)), dims=1)')
+
+density(StatsFuns.softplus.(samples[6, :]))
