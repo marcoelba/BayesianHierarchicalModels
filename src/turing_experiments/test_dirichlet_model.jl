@@ -26,40 +26,57 @@ include(joinpath("plot_functions.jl"))
 include(joinpath("../utils/classification_metrics.jl"))
 
 
-# Define Gaussian mixture model.
+# Define Gaussian mixture model
 w = [0.25, 0.5, 0.25]
 μ = [-3.5, 0.5, 3.5]
 mixturemodel = MixtureModel([Normal(μₖ, 0.5) for μₖ in μ], w)
 
-# We draw the data points.
-N = 100
-x = rand(mixturemodel, N)
-density(x)
+N = 300
+p = 2
+beta0_true = vcat(ones(100) * -2., ones(100) * 0., ones(100) * 2.)
+beta_true = [1., -1.]
 
-@model function gmm_marginalized(x)
+X = randn(N, p)
+
+y = beta0_true .+ X * beta_true + randn(N)
+
+
+@model function gmm_marginalized(y)
     K = 3
-    μ ~ Bijectors.ordered(MvNormal(zeros(K), I))
-    w ~ Dirichlet(K, 1.0)
 
-    x ~ MixtureModel([Normal(μₖ, 1.) for μₖ in μ], w)
+    mu ~ Bijectors.ordered(MvNormal(zeros(K), I))
+    mix_probs ~ Dirichlet(K, 1.0)
+
+    beta0 ~ filldist(
+        MixtureModel([Normal(mu_k, 0.5) for mu_k in mu], mix_probs),
+        N
+    )
+
+    beta ~ MultivariateNormal(zeros(p), 1.)
+
+    y ~ MultivariateNormal(beta0 .+ X * beta, 1.)
 end
 
-model = gmm_marginalized(x)
+model = gmm_marginalized(y)
 
 bij = Bijectors.bijector(model)
 inv_bij = Bijectors.inverse(bij)
 
 sampler = NUTS()
-chains = sample(model, sampler, 2000)
+chains = sample(model, sampler, 1000)
 
-plot(chains, legend=true)
+plot(chains[["mu[1]", "mu[2]", "mu[3]"]], legend=true)
+plot(chains[["mix_probs[1]", "mix_probs[2]", "mix_probs[3]"]], legend=true)
+plot(chains[["beta0[1]", "beta0[199]", "beta0[300]"]], legend=true)
 
 
 # Simplex bijector
+y = Float32.([-15, 35, -15, -15])
+StatsFuns.softmax(vcat(y./maximum(y), 0f0))
+
 using LogExpFunctions
 
-y = [1., -0.5]
-x = zeros(3)
+x = zeros32(length(y) + 1)
 
 K = length(y) + 1
 @assert K > 1 "x needs to be of length greater than 1"
@@ -103,20 +120,17 @@ end
 K = 3
 
 # Likelihood
-function log_likelihood(; y, mu, mix_probs)
-    sum(
-        Distributions.logpdf.(
-            MixtureModel([Normal(μₖ, 1.) for μₖ in mu], mix_probs),
-            y
-        )
+function log_likelihood(; y, X, beta, beta0)
+    logpdf(
+        MultivariateNormal(X*beta .+ beta0, 1.), y
     )
 end
 
-log_likelihood(y=x, mu=μ, mix_probs=w)
+log_likelihood(y=y, X=X, beta=beta, beta0=beta0)
 
 
-function log_likelihood(;
-    mix_probs, mu, y, sd=0.5
+function logpdf_mixture_prior(;
+    mix_probs, mu, y, sd=1.
     )
     w_ext = transpose(mix_probs)
     mu = transpose(mu)
@@ -129,24 +143,33 @@ function log_likelihood(;
     sum(log.(s) .+ offset)
 end
 
-log_likelihood(y=x, mu=μ, mix_probs=w, sd=1.)
 
 # Joint
-num_params = 6
+num_params = N + p + K + K - 1
+
+n_beta0_from = K+K
+n_beta0_to = n_beta0_from + N - 1
+n_beta_from = n_beta0_to + 1
+n_beta_to = n_beta_from + p - 1
 
 function log_joint(theta_hat)
 
-    mix_probs = StatsFuns.softmax(vcat(theta_hat[1:2], 0.))
-    clusters_mean = ordered_vector(theta_hat[3:5])
-    sd = StatsFuns.softplus(theta_hat[6])
+    mix_probs = StatsFuns.softmax(vcat(theta_hat[1:K-1], 0.))
+    clusters_mean = ordered_vector(theta_hat[K:K-1+K])
+
+    # sd = StatsFuns.softplus(theta_hat[6])
+
+    beta0 = theta_hat[n_beta0_from:n_beta0_to]
+    beta = theta_hat[n_beta_from:n_beta_to]
 
     loglik = log_likelihood(
-        y=x, mu=clusters_mean, mix_probs=mix_probs, sd=sd
+        y=y, X=X, beta=beta, beta0=beta0
     )
 
     log_prior = logpdf(MvNormal(zeros(K), I), clusters_mean) +
         logpdf(Dirichlet(K, 1.0), mix_probs) +
-        logpdf(truncated(Normal(0, 0.1), 0, Inf), sd)
+        logpdf_mixture_prior(mix_probs=mix_probs, mu=clusters_mean, y=beta0, sd=0.5)
+        # logpdf(truncated(Normal(0, 0.1), 0, Inf), sd)
         
     loglik + log_prior
 end
@@ -175,7 +198,7 @@ num_steps = 1000
 samples_per_step = 5
 
 elbo_trace = zeros32(num_steps)
-theta_trace = zeros32(num_steps, num_params)
+theta_trace = zeros32(num_steps, num_params+1)
 
 # Define objective
 variational_objective = Turing.Variational.ELBO()
@@ -209,11 +232,11 @@ while (step ≤ num_steps) && !converged
 
     # 5. Do whatever analysis you want - Store ELBO value
     q_temp = getq(theta)
-    sample_t = rand(q_temp)
-    
-    theta_trace[step, 1:2] = StatsFuns.softmax(sample_t[1:2])
-    theta_trace[step, 3:5] = ordered_vector(sample_t[3:5])
-    theta_trace[step, 6] = StatsFuns.softplus(sample_t[6])
+
+    theta_trace[step, 1:K-1] = q_temp.μ[1:K-1]
+    theta_trace[step, K:K-1+K] = ordered_vector(q_temp.μ[K:K-1+K])
+    theta_trace[step, n_beta0_from:n_beta0_to] = q_temp.μ[n_beta0_from:n_beta0_to]
+    theta_trace[step, n_beta_from:n_beta_to] = q_temp.μ[n_beta_from:n_beta_to]
 
     elbo_trace[step] = AdvancedVI.elbo(alg, q_temp, log_joint, samples_per_step)
 
@@ -231,8 +254,8 @@ plot(theta_trace)
 
 samples = rand(q, 2000)
 
-density(ordered_vector_matrix(samples[3:5, :])')
 
-density(StatsFuns.softmax(vcat(samples[1:2, :], zeros(1, 2000)), dims=1)')
-
-density(StatsFuns.softplus.(samples[6, :]))
+density(StatsFuns.softmax(vcat(samples[1:K-1, :], zeros(1, 2000)), dims=1)')
+density(ordered_vector_matrix(samples[K:K-1+K, :])')
+density(samples[n_beta0_from:n_beta0_to, :]')
+density(samples[n_beta_from:n_beta_to, :]')

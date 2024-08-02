@@ -49,7 +49,7 @@ data_dict = generate_mixed_model_data(;
     n_individuals=n_individuals, n_time_points=n_per_ind,
     p=p, p1=p1, p0=p0, corr_factor=corr_factor,
     include_random_int=true, random_intercept_sd=0.5,
-    include_random_time=true, random_time_sd=0.5,
+    include_random_time=true, random_time_sd=1.,
     include_random_slope=false
 )
 
@@ -69,7 +69,24 @@ function ordered_vector_bij(x)
 end
 
 function simplex_bij(x)
-    StatsFuns.softmax(vcat(x, 0f0))
+    StatsFuns.softmax(vcat(x ./ maximum(x), 0f0))
+end
+
+function ordered_vector_bij_matrix(X)
+    Y = zeros(size(X, 1), size(X, 2))
+    L = size(X, 2)
+    for ii = 1:size(X, 2)
+        Y[ii, :] = cumsum(vcat(X[ii, 1], StatsFuns.softplus.(X[ii, 2:L])))
+    end
+    return Y
+end
+
+function simplex_bij_matrix(X)
+    Y = zeros(size(X, 1), size(X, 2)+1)
+    for ii = 1:size(X, 1)
+        Y[ii, :] = StatsFuns.softmax(vcat(X[ii, :], 0f0))
+    end
+    return Y
 end
 
 
@@ -179,7 +196,7 @@ log_prior_beta0_rand_mix_probs(x::AbstractArray{<:Float32}) = Distributions.logp
 params_dict["beta0_rand_clusters_mean"] = OrderedDict(
     "size" => (n_clusters),
     "from" => num_params+1, "to" => num_params + n_clusters,
-    "bij" => ordered_vector_bij
+    "bij" => identity
 )
 num_params += n_clusters
 log_prior_beta0_rand_clusters_mean(x::AbstractArray{<:Float32}) = Distributions.logpdf(
@@ -320,7 +337,7 @@ function log_joint(theta_hat::AbstractArray{Float32})
 
     beta0_fixed = params_names.beta0_fixed
 
-    sigma_beta0 = params_dict["sigma_beta0"]["bij"].(params_names.sigma_beta0)
+    # sigma_beta0 = params_dict["sigma_beta0"]["bij"].(params_names.sigma_beta0)
     beta0_rand_mix_probs = params_dict["beta0_rand_mix_probs"]["bij"](params_names.beta0_rand_mix_probs)
     beta0_rand_clusters_mean = params_dict["beta0_rand_clusters_mean"]["bij"](params_names.beta0_rand_clusters_mean)
     beta0_random = params_names.beta0_random
@@ -343,12 +360,12 @@ function log_joint(theta_hat::AbstractArray{Float32})
         log_prior_sigma_slab(sigma_slab) +
         log_prior_beta_fixed(gamma, sigma_slab, beta_fixed) +
         log_prior_beta0_fixed(beta0_fixed) +
-        log_prior_sigma_beta0(sigma_beta0) +
         log_prior_beta0_rand_mix_probs(beta0_rand_mix_probs) +
         log_prior_beta0_rand_clusters_mean(beta0_rand_clusters_mean) +
-        log_prior_beta0_random(beta0_rand_mix_probs, beta0_rand_clusters_mean, sigma_beta0, beta0_random) +
+        log_prior_beta0_random(beta0_rand_mix_probs, beta0_rand_clusters_mean, 1f0, beta0_random) +
         log_prior_sigma_beta_time(sigma_beta_time) +
         log_prior_beta_time(sigma_beta_time, beta_time)
+        # log_prior_sigma_beta0(sigma_beta0) +
     
     loglik + log_prior
 end
@@ -380,7 +397,7 @@ samples_per_step = 5
 
 n_runs = 2
 elbo_trace = zeros32(num_steps, n_runs)
-theta_trace = zeros32(num_steps, dim_q)
+theta_trace = zeros32(n_runs, num_steps, num_params)
 posteriors = Dict()
 
 for chain in range(1, n_runs)
@@ -391,7 +408,7 @@ for chain in range(1, n_runs)
     variational_objective = Turing.Variational.ELBO()
 
     # Optimizer
-    optimizer = DecayedADAGrad()
+    optimizer = DecayedADAGrad(0.01)
     # optimizer = Flux.Adam(0.001)
 
     # VI algorithm
@@ -428,8 +445,10 @@ for chain in range(1, n_runs)
         @. theta = theta - diff_grad
 
         # 5. Do whatever analysis you want - Store ELBO value
-        elbo_trace[step, chain] = AdvancedVI.elbo(alg, getq(theta), log_joint, samples_per_step)
-        # theta_trace[step, :] = deepcopy(theta)
+        step_q = getq(theta)
+        elbo_trace[step, chain] = AdvancedVI.elbo(alg, step_q, log_joint, samples_per_step)
+
+        theta_trace[chain, step, :] = step_q.μ
 
         step += 1
 
@@ -443,6 +462,21 @@ end
 
 plot(elbo_trace, label="ELBO")
 plot(elbo_trace[300:num_steps, :], label="ELBO")
+
+sum(theta_trace[1, :, :] .!= 0, dims=1)
+
+theta_trace[1, 4, params_dict["beta0_rand_mix_probs"]["from"]:params_dict["beta0_rand_mix_probs"]["to"]]
+theta_hat = theta_trace[1, 2, :]
+findall((isnan), theta_hat)
+params_dict
+
+plot(simplex_bij_matrix(theta_trace[1, :, params_dict["beta0_rand_mix_probs"]["from"]:params_dict["beta0_rand_mix_probs"]["to"]]))
+plot(identity(theta_trace[1, :, params_dict["beta0_rand_clusters_mean"]["from"]:params_dict["beta0_rand_clusters_mean"]["to"]]))
+
+plot(theta_trace[1, :, params_dict["beta0_random"]["from"]:params_dict["beta0_random"]["to"]])
+
+
+
 
 
 MC_SAMPLES = 2000
