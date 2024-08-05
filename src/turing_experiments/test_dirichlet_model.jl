@@ -27,10 +27,6 @@ include(joinpath("../utils/classification_metrics.jl"))
 
 
 # Define Gaussian mixture model
-w = [0.25, 0.5, 0.25]
-μ = [-3.5, 0.5, 3.5]
-mixturemodel = MixtureModel([Normal(μₖ, 0.5) for μₖ in μ], w)
-
 N = 300
 p = 2
 beta0_true = vcat(ones(100) * -2., ones(100) * 0., ones(100) * 2.)
@@ -71,8 +67,8 @@ plot(chains[["beta0[1]", "beta0[199]", "beta0[300]"]], legend=true)
 
 
 # Simplex bijector
-y = Float32.([-15, 35, -15, -15])
-StatsFuns.softmax(vcat(y./maximum(y), 0f0))
+y = Float32.([-35, 45, -35, -35])
+StatsFuns.softmax(vcat(y, 0f0))
 
 using LogExpFunctions
 
@@ -126,7 +122,7 @@ function log_likelihood(; y, X, beta, beta0)
     )
 end
 
-log_likelihood(y=y, X=X, beta=beta, beta0=beta0)
+# log_likelihood(y=y, X=X, beta=beta, beta0=beta0)
 
 
 function logpdf_mixture_prior(;

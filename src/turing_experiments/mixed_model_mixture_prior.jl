@@ -68,8 +68,18 @@ function ordered_vector_bij(x)
     cumsum(vcat(x[1], StatsFuns.softplus.(x[2:L])))
 end
 
+# y = [-1., -1., 2., 0.]
+# ordered_vector_bij(y)
+
+# x = similar(y)
+
+# x[1] = y[1]
+# for i in 2:length(x)
+#     x[i] = x[i - 1] + exp(y[i])
+# end
+
 function simplex_bij(x)
-    StatsFuns.softmax(vcat(x ./ maximum(x), 0f0))
+    StatsFuns.softmax(vcat(x, 0f0))
 end
 
 function ordered_vector_bij_matrix(X)
@@ -174,7 +184,7 @@ log_prior_beta0_fixed(beta0_fixed::Float32) = Distributions.logpdf(prior_beta0_f
 
 params_dict["sigma_beta0"] = OrderedDict("size" => (1), "from" => num_params+1, "to" => num_params + 1, "bij" => StatsFuns.softplus)
 num_params += 1
-prior_sigma_beta0 = truncated(Normal(0f0, 0.1f0), 0f0, Inf)
+prior_sigma_beta0 = truncated(Normal(0f0, 0.5f0), 0f0, Inf)
 log_prior_sigma_beta0(sigma_beta0::Float32) = Distributions.logpdf(prior_sigma_beta0, sigma_beta0)
 
 
@@ -337,7 +347,7 @@ function log_joint(theta_hat::AbstractArray{Float32})
 
     beta0_fixed = params_names.beta0_fixed
 
-    # sigma_beta0 = params_dict["sigma_beta0"]["bij"].(params_names.sigma_beta0)
+    sigma_beta0 = params_dict["sigma_beta0"]["bij"].(params_names.sigma_beta0)
     beta0_rand_mix_probs = params_dict["beta0_rand_mix_probs"]["bij"](params_names.beta0_rand_mix_probs)
     beta0_rand_clusters_mean = params_dict["beta0_rand_clusters_mean"]["bij"](params_names.beta0_rand_clusters_mean)
     beta0_random = params_names.beta0_random
@@ -362,10 +372,10 @@ function log_joint(theta_hat::AbstractArray{Float32})
         log_prior_beta0_fixed(beta0_fixed) +
         log_prior_beta0_rand_mix_probs(beta0_rand_mix_probs) +
         log_prior_beta0_rand_clusters_mean(beta0_rand_clusters_mean) +
-        log_prior_beta0_random(beta0_rand_mix_probs, beta0_rand_clusters_mean, 1f0, beta0_random) +
+        log_prior_beta0_random(beta0_rand_mix_probs, beta0_rand_clusters_mean, sigma_beta0, beta0_random) +
         log_prior_sigma_beta_time(sigma_beta_time) +
-        log_prior_beta_time(sigma_beta_time, beta_time)
-        # log_prior_sigma_beta0(sigma_beta0) +
+        log_prior_beta_time(sigma_beta_time, beta_time) +
+        log_prior_sigma_beta0(sigma_beta0)
     
     loglik + log_prior
 end
@@ -392,7 +402,7 @@ rand(q)
 
 
 # >>>>>>>>>>>>>>>> Manual training loop <<<<<<<<<<<<<<<<<
-num_steps = 4000
+num_steps = 5000
 samples_per_step = 5
 
 n_runs = 2
@@ -409,7 +419,6 @@ for chain in range(1, n_runs)
 
     # Optimizer
     optimizer = DecayedADAGrad(0.01)
-    # optimizer = Flux.Adam(0.001)
 
     # VI algorithm
     alg = AdvancedVI.ADVI(samples_per_step, num_steps, adtype=ADTypes.AutoZygote())
@@ -417,7 +426,7 @@ for chain in range(1, n_runs)
     # --- Train loop ---
     converged = false
     step = 1
-    theta = randn32(dim_q) * 0.2f0
+    theta = randn32(dim_q) * 0.2f0 .- 0.5f0
 
     prog = ProgressMeter.Progress(num_steps, 1)
     diff_results = DiffResults.GradientResult(theta)
@@ -461,7 +470,7 @@ for chain in range(1, n_runs)
 end
 
 plot(elbo_trace, label="ELBO")
-plot(elbo_trace[300:num_steps, :], label="ELBO")
+plot(elbo_trace[1000:num_steps, :], label="ELBO")
 
 sum(theta_trace[1, :, :] .!= 0, dims=1)
 
@@ -471,6 +480,8 @@ findall((isnan), theta_hat)
 params_dict
 
 plot(simplex_bij_matrix(theta_trace[1, :, params_dict["beta0_rand_mix_probs"]["from"]:params_dict["beta0_rand_mix_probs"]["to"]]))
+plot(ordered_vector_matrix(theta_trace[1, :, params_dict["beta0_rand_mix_probs"]["from"]:params_dict["beta0_rand_mix_probs"]["to"]]))
+
 plot(identity(theta_trace[1, :, params_dict["beta0_rand_clusters_mean"]["from"]:params_dict["beta0_rand_clusters_mean"]["to"]]))
 
 plot(theta_trace[1, :, params_dict["beta0_random"]["from"]:params_dict["beta0_random"]["to"]])
@@ -494,21 +505,20 @@ display(plt)
 
 density_posterior(posterior_samples, "sigma_y", params_dict)
 
-density_posterior(samples, "beta_fixed", params_dict; plot_label=false)
+density_posterior(posterior_samples, "beta_fixed", params_dict; plot_label=false)
 
 density_posterior(samples, "gamma_logit", params_dict; plot_label=false)
 
 histogram_posterior(samples, "sigma_slab", params_dict; plot_label=false)
 
-histogram_posterior(samples, "beta0_fixed", params_dict; plot_label=false)
 
 density_posterior(posterior_samples, "sigma_beta0", params_dict; plot_label=true)
 
 density_posterior(posterior_samples, "beta_time", params_dict; plot_label=true)
 
 density_posterior(posterior_samples, "beta0_random", params_dict; plot_label=false)
-
-boxplot(vec(samples[params_dict["beta0_random"]["from"]:params_dict["beta0_random"]["to"], :]))
+density_posterior(posterior_samples, "beta0_rand_clusters_mean", params_dict; plot_label=true, broadcast_input=false)
+density_posterior(posterior_samples, "beta0_rand_mix_probs", params_dict; plot_label=false, broadcast_input=false)
 
 
 
