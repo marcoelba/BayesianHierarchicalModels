@@ -78,7 +78,7 @@ end
 #     x[i] = x[i - 1] + exp(y[i])
 # end
 
-function simplex_bij(x)
+function simplex_bij(x::AbstractArray{<:Float32})
     StatsFuns.softmax(vcat(x, 0f0))
 end
 
@@ -206,7 +206,7 @@ log_prior_beta0_rand_mix_probs(x::AbstractArray{<:Float32}) = Distributions.logp
 params_dict["beta0_rand_clusters_mean"] = OrderedDict(
     "size" => (n_clusters),
     "from" => num_params+1, "to" => num_params + n_clusters,
-    "bij" => identity
+    "bij" => ordered_vector_bij
 )
 num_params += n_clusters
 log_prior_beta0_rand_clusters_mean(x::AbstractArray{<:Float32}) = Distributions.logpdf(
@@ -379,7 +379,7 @@ function log_joint(theta_hat::AbstractArray{Float32})
     
     loglik + log_prior
 end
-theta_hat = rand32(num_params) * 0.5f0
+theta_hat = rand32(num_params) * 0.2f0 .- 0.5f0
 log_joint(theta_hat)
 
 # Variational Distribution
@@ -479,6 +479,7 @@ theta_hat = theta_trace[1, 2, :]
 findall((isnan), theta_hat)
 params_dict
 
+
 plot(simplex_bij_matrix(theta_trace[1, :, params_dict["beta0_rand_mix_probs"]["from"]:params_dict["beta0_rand_mix_probs"]["to"]]))
 plot(ordered_vector_matrix(theta_trace[1, :, params_dict["beta0_rand_mix_probs"]["from"]:params_dict["beta0_rand_mix_probs"]["to"]]))
 
@@ -517,9 +518,46 @@ density_posterior(posterior_samples, "sigma_beta0", params_dict; plot_label=true
 density_posterior(posterior_samples, "beta_time", params_dict; plot_label=true)
 
 density_posterior(posterior_samples, "beta0_random", params_dict; plot_label=false)
-density_posterior(posterior_samples, "beta0_rand_clusters_mean", params_dict; plot_label=true, broadcast_input=false)
-density_posterior(posterior_samples, "beta0_rand_mix_probs", params_dict; plot_label=false, broadcast_input=false)
+density_posterior(posterior_samples[2:2], "beta0_rand_clusters_mean", params_dict; plot_label=true, broadcast_input=false)
+density_posterior(posterior_samples[2:2], "beta0_rand_mix_probs", params_dict; plot_label=true, broadcast_input=false)
 
+
+# posterior cluster assignement
+function sample_class(posterior_samples, N)
+    n_chains = length(posterior_samples)
+    n_samples = size(posterior_samples[1], 2)
+    cluster_array = zeros32(n_chains, N, n_samples)
+
+    for chain = 1:n_runs
+        post_mean = posteriors["$(chain)"].μ[params_dict["beta0_rand_clusters_mean"]["from"]:params_dict["beta0_rand_clusters_mean"]["to"]]
+        post_sd = sqrt.(posteriors["$(chain)"].Σ.diag[params_dict["beta0_rand_clusters_mean"]["from"]:params_dict["beta0_rand_clusters_mean"]["to"]])
+        beta0_rand_clusters_dist = [Normal(mu, sd) for (mu, sd) in zip(post_mean, post_sd)]
+        
+        for mc = 1:n_samples
+            begin
+                params_names = ComponentArray(posterior_samples[chain][:, mc], proto_axes)
+            end
+            
+            beta0_rand_mix_probs = params_dict["beta0_rand_mix_probs"]["bij"](params_names.beta0_rand_mix_probs)
+            beta0_random = params_names.beta0_random
+
+            for (j, beta0_j) in enumerate(beta0_random)
+                lvec = logpdf.(beta0_rand_clusters_dist, beta0_j) .+ log.(beta0_rand_mix_probs)
+                cluster_array[chain, j, mc] = rand(Categorical(StatsFuns.softmax(lvec)))
+            end
+        end
+        
+    end # chain
+    return cluster_array
+end
+
+cluster_ass = sample_class(posterior_samples, n_individuals)
+cluster_max = zeros(n_individuals)
+
+for j = 1:n_individuals
+    cluster_max[j] = mode(cluster_ass[1, j, :])
+end
+frequencies(cluster_max)
 
 
 inclusion_probs = zeros(p, n_runs)
