@@ -189,7 +189,7 @@ log_prior_sigma_beta0(sigma_beta0::Float32) = Distributions.logpdf(prior_sigma_b
 
 
 # Mixture prior distribution on random intercept
-n_clusters = 5
+n_clusters = 10
 
 # mixing probabilities
 params_dict["beta0_rand_mix_probs"] = OrderedDict(
@@ -402,7 +402,7 @@ rand(q)
 
 
 # >>>>>>>>>>>>>>>> Manual training loop <<<<<<<<<<<<<<<<<
-num_steps = 5000
+num_steps = 6000
 samples_per_step = 5
 
 n_runs = 2
@@ -528,7 +528,7 @@ function sample_class(posterior_samples, N)
     n_samples = size(posterior_samples[1], 2)
     cluster_array = zeros32(n_chains, N, n_samples)
 
-    for chain = 1:n_runs
+    for chain = 1:n_chains
         post_mean = posteriors["$(chain)"].μ[params_dict["beta0_rand_clusters_mean"]["from"]:params_dict["beta0_rand_clusters_mean"]["to"]]
         post_sd = sqrt.(posteriors["$(chain)"].Σ.diag[params_dict["beta0_rand_clusters_mean"]["from"]:params_dict["beta0_rand_clusters_mean"]["to"]])
         beta0_rand_clusters_dist = [Normal(mu, sd) for (mu, sd) in zip(post_mean, post_sd)]
@@ -558,6 +558,7 @@ for j = 1:n_individuals
     cluster_max[j] = mode(cluster_ass[1, j, :])
 end
 frequencies(cluster_max)
+frequencies(cluster_ass[1, 1, :])
 
 
 inclusion_probs = zeros(p, n_runs)

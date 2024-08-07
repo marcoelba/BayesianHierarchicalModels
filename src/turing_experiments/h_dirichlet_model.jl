@@ -54,7 +54,7 @@ end
 # Manual
 
 # priors
-K = 10
+K = 3
 
 # Likelihood
 function log_likelihood(; y, X, beta, beta0, sigma_y)
@@ -62,8 +62,6 @@ function log_likelihood(; y, X, beta, beta0, sigma_y)
         MultivariateNormal(X*beta .+ beta0, sigma_y), y
     )
 end
-
-# log_likelihood(y=y, X=X, beta=beta, beta0=beta0)
 
 
 function logpdf_mixture_prior(y;
@@ -163,7 +161,7 @@ alg = AdvancedVI.ADVI(samples_per_step, num_steps, adtype=ADTypes.AutoZygote())
 # --- Train loop ---
 converged = false
 step = 1
-theta = randn32(dim_q) * 0.5f0
+theta = randn32(dim_q) * 0.2f0
 
 prog = ProgressMeter.Progress(num_steps, 1)
 diff_results = DiffResults.GradientResult(theta)
@@ -230,11 +228,12 @@ function logpdf_mixture(;
     log.(s) .+ offset
 end
 
+clusters_mean = ordered_vector(q.μ[clusters_mean_from:clusters_mean_to])
+
 clusters_mean = ordered_vector_matrix(samples[clusters_mean_from:clusters_mean_to, :])
 beta0 = samples[beta0_from:beta0_to, :]
 sd_clusters = StatsFuns.softplus.(samples[sd_clusters_from, :])
 mix_probs = StatsFuns.softmax(vcat(samples[mix_probs_from:mix_probs_to, :], zeros(1, 2000)), dims=1)
-mix_probs = ones(size(mix_probs))
 
 samples_class = zeros(N, 2000)
 modal_class = zeros(N)
