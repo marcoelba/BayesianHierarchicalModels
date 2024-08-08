@@ -35,11 +35,11 @@ n_per_ind = 5
 n_total = n_individuals * n_per_ind
 
 # tot covariates
-p = 1000
-prop_non_zero = 0.01
+p = 500
+prop_non_zero = 0.05
 p1 = Int(p * prop_non_zero)
 p0 = p - p1
-corr_factor = 0.5
+corr_factor = 0.2
 
 # Covariates with random effects
 d = 2
@@ -79,23 +79,11 @@ log_prior_sigma_y(sigma_y::Float32) = Distributions.logpdf(prior_sigma_y, sigma_
 
 # Fixed effects
 
-# Normal Distribution
-# params_dict["beta_fixed"] = OrderedDict("size" => (p), "from" => num_params+1, "to" => num_params + p, "bij" => identity)
-# num_params += p
-# prior_beta_fixed = Distributions.MultivariateNormal(zeros(p), 5.)
-# log_prior_beta_fixed(beta_fixed) = Distributions.logpdf(prior_beta_fixed, beta_fixed)
-
 # Spike and Slab distribution
 # prob Spike and Slab
 params_dict["gamma_logit"] = OrderedDict("size" => (p), "from" => num_params+1, "to" => num_params + p, "bij" => StatsFuns.logistic)
 num_params += p
 prior_gamma_logit = Turing.filldist(LogitRelaxedBernoulli(0.1f0, 0.1f0), p)
-
-# prior_probs = vcat(ones32(p0) * 0.1f0, ones32(p1) * 0.9f0)
-# prior_gamma_logit = Turing.arraydist([
-#     LogitRelaxedBernoulli(prior_probs[jj], 0.1f0) for jj = 1:p
-# ])
-
 log_prior_gamma_logit(gamma_logit::AbstractArray{Float32}) = Distributions.logpdf(prior_gamma_logit, gamma_logit)
 
 # prior sigma beta Slab
@@ -106,19 +94,19 @@ log_prior_sigma_slab(sigma_slab::Float32) = Distributions.logpdf(prior_sigma_sla
 
 # prior beta
 # SS
-# function log_prior_beta(gamma, sigma_beta, beta)
-#     Distributions.logpdf(
-#         Turing.arraydist([
-#             GaussianSpikeSlab(0., sigma_beta, gg) for gg in gamma
-#         ]),
-#         beta
-#     )
-# end
+function log_prior_beta_fixed(gamma, sigma_beta, beta)
+    Distributions.logpdf(
+        Turing.arraydist([
+            GaussianSpikeSlab(0., sigma_beta, gg) for gg in gamma
+        ]),
+        beta
+    )
+end
 
-# Continuous Mixture
 params_dict["beta_fixed"] = OrderedDict("size" => (p), "from" => num_params+1, "to" => num_params + p, "bij" => identity)
 num_params += p
 
+# OR Continuous Mixture
 # Custom function
 function log_prior_beta_fixed(
     w::AbstractArray{<:Float32},
@@ -170,66 +158,6 @@ function log_prior_beta0_random(sigma_beta0::Float32, beta0_random::AbstractArra
         beta0_random
     )
 end
-
-# Mixture prior distribution on random intercept
-n_clusters = 5
-
-# mixing probabilities
-params_dict["beta0_rand_mix_probs"] = OrderedDict(
-    "size" => (n_individuals),
-    "from" => num_params+1, "to" => num_params + n_individuals,
-    "bij" => StatsFuns.logistic
-)
-num_params += n_individuals
-log_prior_beta0_rand_mix_probs(x::AbstractArray{<:Float32}) = Distributions.logpdf(
-    Distributions.Dirichlet(n_clusters, 1f0), x
-)
-# clusters mean
-params_dict["beta0_rand_clusters_mean"] = OrderedDict(
-    "size" => (n_clusters),
-    "from" => num_params+1, "to" => num_params + n_clusters,
-    "bij" => identity
-)
-num_params += n_clusters
-log_prior_beta0_rand_clusters_mean(x::AbstractArray{<:Float32}) = Distributions.logpdf(
-    Distributions.MultivariateNormal(zeros32(n_clusters), 1f0), x
-)
-
-function log_prior_beta0_random(
-    w::AbstractArray{<:Float32},
-    mu::AbstractArray{<:Float32},
-    x::AbstractArray{<:Float32};
-    sd::Float32 = 1f0
-    )
-
-    w_ext = transpose(w)
-    mu = transpose(mu)
-
-    xstd = -0.5f0 .* ((x .- mu) ./ sd).^2f0
-    wstd = w_ext ./ (sqrt(2f0 .* Float32(pi)) .* sd)
-    offset = maximum(xstd .* wstd, dims=2)
-    xe = exp.(xstd .- offset)
-    s = sum(xe .* wstd, dims=2)
-    sum(log.(s) .+ offset)
-end
-
-# function log_prior_beta0_random(
-#     w::AbstractArray{<:Float32},
-#     mu::AbstractArray{<:Float32},
-#     x::Float32;
-#     sd::Float32 = 1f0
-#     )
-
-#     xstd = -0.5f0 .* ((x .- mu) ./ sd).^2f0
-#     wstd = w ./ (sqrt(2f0 .* Float32(pi)) .* sd)
-#     offset = maximum(xstd .* wstd, dims=1)
-#     xe = exp.(xstd .- offset)
-#     s = sum(xe .* wstd, dims=1)
-#     sum(log.(s) .+ offset)
-# end
-
-# log_prior_beta0_random.(Ref(w), Ref(mu), x)
-
 
 # Random time component
 params_dict["sigma_beta_time"] = OrderedDict("size" => (1), "from" => num_params+1, "to" => num_params + 1, "bij" => StatsFuns.softplus)
@@ -389,10 +317,10 @@ rand(q)
 
 
 # >>>>>>>>>>>>>>>> Manual training loop <<<<<<<<<<<<<<<<<
-num_steps = 6000
+num_steps = 5000
 samples_per_step = 2
 
-n_runs = 3
+n_runs = 2
 elbo_trace = zeros32(num_steps, n_runs)
 theta_trace = zeros32(num_steps, dim_q)
 posteriors = Dict()
@@ -473,21 +401,19 @@ display(plt)
 
 density_posterior(posterior_samples, "sigma_y", params_dict)
 
-density_posterior(samples, "beta_fixed", params_dict; plot_label=false)
+density_posterior(posterior_samples, "beta_fixed", params_dict; plot_label=false)
 
-density_posterior(samples, "gamma_logit", params_dict; plot_label=false)
+density_posterior(posterior_samples, "gamma_logit", params_dict; plot_label=false)
 
-histogram_posterior(samples, "sigma_slab", params_dict; plot_label=false)
+density_posterior(posterior_samples, "sigma_slab", params_dict; plot_label=false)
 
-histogram_posterior(samples, "beta0_fixed", params_dict; plot_label=false)
+density_posterior(posterior_samples, "beta0_fixed", params_dict; plot_label=false)
 
 density_posterior(posterior_samples, "sigma_beta0", params_dict; plot_label=true)
 
 density_posterior(posterior_samples, "beta_time", params_dict; plot_label=true)
 
 density_posterior(posterior_samples, "beta0_random", params_dict; plot_label=false)
-
-boxplot(vec(samples[params_dict["beta0_random"]["from"]:params_dict["beta0_random"]["to"], :]))
 
 
 
@@ -570,22 +496,6 @@ mean(tpr_distribution)
 median(tpr_distribution)
 
 histogram(n_selected_distribution, label="FDR", normalize=:probability)
-minimum(n_selected_distribution)
-argmin(n_selected_distribution)
-
-sum(mean(selection_matrix, dims=2) .> 0.5)
-findall(>(0.5), mean(selection_matrix, dims=2)[:, 1])
-metrics = classification_metrics.wrapper_metrics(
-    data_dict["beta_fixed"] .!= 0.,
-    mean(selection_matrix, dims=2)[:, 1] .> 0.5
-)
-
-findall(!=(0), selection_matrix[:, argmin(n_selected_distribution)])
-metrics = classification_metrics.wrapper_metrics(
-    data_dict["beta_fixed"] .!= 0.,
-    selection_matrix[:, argmin(n_selected_distribution)] .!= 0
-)
-
 
 abs_project_path = normpath(joinpath(@__FILE__, "..", "..", ".."))
 

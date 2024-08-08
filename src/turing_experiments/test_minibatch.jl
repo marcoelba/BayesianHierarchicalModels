@@ -81,14 +81,14 @@ log_prior_sigma_slab(sigma_slab::Float32) = Distributions.logpdf(prior_sigma_sla
 
 # prior beta
 # SS
-# function log_prior_beta(gamma, sigma_beta, beta)
-#     Distributions.logpdf(
-#         Turing.arraydist([
-#             GaussianSpikeSlab(0., sigma_beta, gg) for gg in gamma
-#         ]),
-#         beta
-#     )
-# end
+function log_prior_beta_fixed(gamma, sigma_beta, beta)
+    Distributions.logpdf(
+        Turing.arraydist([
+            GaussianSpikeSlab(0., sigma_beta, gg) for gg in gamma
+        ]),
+        beta
+    )
+end
 
 # Continuous Mixture
 params_dict["beta_fixed"] = OrderedDict("size" => (p), "from" => num_params+1, "to" => num_params + p, "bij" => identity)
@@ -132,12 +132,6 @@ function likelihood(;
         sigma_y
     )
 end
-likelihood(
-    beta0_fixed=data_dict["beta0"],
-    beta_fixed=data_dict["beta"],
-    sigma_y=1f0,
-    Xfix=data_dict["X"]
-)
 
 function log_likelihood(;
     y::AbstractArray{Float32},
@@ -224,16 +218,19 @@ rand(q)
 
 
 # >>>>>>>>>>>>>>>> Manual training loop <<<<<<<<<<<<<<<<<
-num_steps = 5000
+num_steps = 100
 samples_per_step = 2
 
-n_runs = 2
+n_runs = 1
 elbo_trace = zeros32(num_steps, n_runs)
+
 theta_trace = zeros32(num_steps, dim_q)
 posteriors = Dict()
 
-n_batches = 5
+n_batches = 10
 batch_size = Int(n_individuals / n_batches)
+elbo_trace_batch = zeros32(num_steps * n_batches, n_runs)
+
 
 # Random.shuffle(1:n_individuals)
 # collect(Base.Iterators.partition(Random.shuffle(1:n_individuals), batch_size))
@@ -258,6 +255,8 @@ for chain in range(1, n_runs)
 
     prog = ProgressMeter.Progress(num_steps, 1)
     diff_results = DiffResults.GradientResult(theta)
+
+    counter = 1
 
     while (step ≤ num_steps) && !converged
         batch_indexes = collect(Base.Iterators.partition(Random.shuffle(1:n_individuals), batch_size))
@@ -292,6 +291,15 @@ for chain in range(1, n_runs)
 
             # 4. Update parameters
             @. theta = theta - diff_grad
+
+            elbo_trace_batch[counter, chain] = AdvancedVI.elbo(
+                alg,
+                getq(theta),
+                batch_log_joint,
+                samples_per_step
+            )
+
+            counter += 1
         end # end bacth loop
 
         # 5. Do whatever analysis you want - Store ELBO value
@@ -317,6 +325,9 @@ end
 
 plot(elbo_trace, label="ELBO")
 plot(elbo_trace[500:num_steps, :], label="ELBO")
+
+plot(elbo_trace_batch, label="ELBO")
+plot(elbo_trace_batch[100:num_steps*n_batches, :], label="ELBO")
 
 
 MC_SAMPLES = 2000

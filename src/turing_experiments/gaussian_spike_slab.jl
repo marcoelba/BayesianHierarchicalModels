@@ -3,7 +3,7 @@ import Turing
 using LinearAlgebra
 
 
-EPS = 1e-16
+EPS = Float32(1e-16)
 
 
 struct GaussianSpikeSlab{
@@ -20,7 +20,7 @@ end
 
 GaussianSpikeSlab(mu, sigma, gamma, slab) = GaussianSpikeSlab(mu, sigma, gamma, slab)
 GaussianSpikeSlab(mu, sigma, gamma) = GaussianSpikeSlab(mu, sigma, gamma, Distributions.Normal(mu, sigma))
-GaussianSpikeSlab(mu, sigma) = GaussianSpikeSlab(mu, sigma, 1., Distributions.Normal(mu, sigma))
+GaussianSpikeSlab(mu, sigma) = GaussianSpikeSlab(mu, sigma, 1f0, Distributions.Normal(mu, sigma))
 
 Distributions.rand(rng::Distributions.AbstractRNG, d::GaussianSpikeSlab) = Distributions.rand(d.slab)
 
@@ -29,8 +29,8 @@ Distributions.logpdf(
     x::Real
 ) = log(d.gamma * exp(Distributions.logpdf(d.slab, x)) + (1f0 - d.gamma) + EPS)
 
-Distributions.minimum(d::GaussianSpikeSlab) = -Inf
-Distributions.maximum(d::GaussianSpikeSlab) = +Inf
+Distributions.minimum(d::GaussianSpikeSlab) = -Inf32
+Distributions.maximum(d::GaussianSpikeSlab) = +Inf32
 
 
 # Test
