@@ -35,7 +35,7 @@ n_per_ind = 5
 n_total = n_individuals * n_per_ind
 
 # tot covariates
-p = 100
+p = 1000
 prop_non_zero = 0.05
 p1 = Int(p * prop_non_zero)
 p0 = p - p1
@@ -199,7 +199,7 @@ params_dict["beta0_rand_mix_probs"] = OrderedDict(
 )
 num_params += n_clusters - 1
 log_prior_beta0_rand_mix_probs(x::AbstractArray{<:Float32}) = Distributions.logpdf(
-    Distributions.Dirichlet(n_clusters, 1f0), x
+    Distributions.Dirichlet(n_clusters, 5f0), x
 )
 
 # clusters mean

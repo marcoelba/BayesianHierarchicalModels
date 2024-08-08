@@ -67,7 +67,7 @@ end
 
 
 function logpdf_mixture_prior(y;
-    mix_probs, mu, sd=1.
+    mix_probs, mu, sd
     )
 
     xstd = -0.5f0 .* ((y .- mu) ./ sd).^2f0
@@ -86,7 +86,7 @@ clusters_mean_from = mix_probs_to + 1
 clusters_mean_to = clusters_mean_from + K - 1
 
 sd_clusters_from = clusters_mean_to + 1
-sd_clusters_to = sd_clusters_from
+sd_clusters_to = sd_clusters_from + K - 1
 
 sigma_y_from = sd_clusters_to + 1
 sigma_y_to = sigma_y_from
@@ -105,7 +105,7 @@ function log_joint(theta_hat)
     mix_probs = StatsFuns.softmax(vcat(theta_hat[mix_probs_from:mix_probs_to], 0.))
     clusters_mean = ordered_vector(theta_hat[clusters_mean_from:clusters_mean_to])
 
-    sd_cluster = StatsFuns.softplus(theta_hat[sd_clusters_from])
+    sd_cluster = StatsFuns.softplus.(theta_hat[sd_clusters_from:sd_clusters_to])
 
     sigma_y = StatsFuns.softplus(theta_hat[sigma_y_from])
 
@@ -117,9 +117,9 @@ function log_joint(theta_hat)
     )
 
     log_prior = logpdf(MvNormal(zeros(K), I * 10.), clusters_mean) +
-        logpdf(Dirichlet(K, 5.0), mix_probs) +
+        logpdf(Dirichlet(K, 0.5), mix_probs) +
         sum(logpdf_mixture_prior.(beta0, mix_probs=mix_probs, mu=clusters_mean, sd=sd_cluster)) +
-        logpdf(truncated(Normal(0, 0.1), 0, Inf), sd_cluster) + 
+        sum(logpdf.(truncated(Normal(0, 0.5), 0, Inf), sd_cluster)) + 
         logpdf(truncated(Normal(0, 1), 0, Inf), sigma_y)
         
     loglik + log_prior
@@ -163,7 +163,7 @@ alg = AdvancedVI.ADVI(samples_per_step, num_steps, adtype=ADTypes.AutoZygote())
 # --- Train loop ---
 converged = false
 step = 1
-theta = randn32(dim_q) * 0.5f0
+theta = randn32(dim_q) * 0.2f0
 
 prog = ProgressMeter.Progress(num_steps, 1)
 diff_results = DiffResults.GradientResult(theta)
@@ -213,7 +213,7 @@ density(ordered_vector_matrix(samples[clusters_mean_from:clusters_mean_to, :])')
 mean(ordered_vector_matrix(samples[clusters_mean_from:clusters_mean_to, :])', dims=1)
 
 density(StatsFuns.softplus.(samples[sigma_y_from, :]))
-density(StatsFuns.softplus.(samples[sd_clusters_from, :]))
+density(StatsFuns.softplus.(samples[sd_clusters_from:sd_clusters_to, :]'))
 density(samples[beta0_from:beta0_to, :]')
 density(samples[beta_from:beta_to, :]')
 
