@@ -70,29 +70,26 @@ log_prior_sigma_y(sigma_y::Float32) = Distributions.logpdf(prior_sigma_y, sigma_
 # prob Spike and Slab
 params_dict["gamma_logit"] = OrderedDict("size" => (p), "from" => num_params+1, "to" => num_params + p, "bij" => StatsFuns.logistic)
 num_params += p
-prior_gamma_logit = Turing.filldist(LogitRelaxedBernoulli(0.1f0, 0.1f0), p)
+prior_gamma_logit = Turing.filldist(LogitRelaxedBernoulli(0.5f0, 0.1f0), p)
 log_prior_gamma_logit(gamma_logit::AbstractArray{Float32}) = Distributions.logpdf(prior_gamma_logit, gamma_logit)
 
 # prior sigma beta Slab
 params_dict["sigma_slab"] = OrderedDict("size" => (1), "from" => num_params+1, "to" => num_params + 1, "bij" => StatsFuns.softplus)
 num_params += 1
-prior_sigma_slab = truncated(Normal(0f0, 0.1f0), 0f0, Inf32)
+prior_sigma_slab = truncated(Normal(0f0, 1f0), 0f0, Inf32)
 log_prior_sigma_slab(sigma_slab::Float32) = Distributions.logpdf(prior_sigma_slab, sigma_slab)
 
 # prior beta
-# SS
+params_dict["beta_fixed"] = OrderedDict("size" => (p), "from" => num_params+1, "to" => num_params + p, "bij" => identity)
+num_params += p
+
+
 function log_prior_beta_fixed(gamma, sigma_beta, beta)
-    Distributions.logpdf(
-        Turing.arraydist([
-            GaussianSpikeSlab(0., sigma_beta, gg) for gg in gamma
-        ]),
-        beta
-    )
+    base_dist_logpdf = -0.5f0 * log.(2f0 .* Float32(pi)) .- log.(sigma_beta) .- 0.5f0 .* (beta ./ sigma_beta).^2f0
+    sum(log.(gamma .* exp.(base_dist_logpdf) .+ (1f0 .- gamma) .+ EPS))
 end
 
 # Continuous Mixture
-params_dict["beta_fixed"] = OrderedDict("size" => (p), "from" => num_params+1, "to" => num_params + p, "bij" => identity)
-num_params += p
 
 # Custom function
 function log_prior_beta_fixed(
@@ -227,7 +224,7 @@ elbo_trace = zeros32(num_steps, n_runs)
 theta_trace = zeros32(num_steps, dim_q)
 posteriors = Dict()
 
-n_batches = 10
+n_batches = 20
 batch_size = Int(n_individuals / n_batches)
 elbo_trace_batch = zeros32(num_steps * n_batches, n_runs)
 
