@@ -80,5 +80,5 @@ function density_posterior(posterior_samples, param, params_dict; plot_label=tru
         end
     
     end
-    display(plt)
+    return plt
 end

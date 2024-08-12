@@ -27,13 +27,11 @@ include(joinpath("plot_functions.jl"))
 include(joinpath("../utils/classification_metrics.jl"))
 
 
-# Generate hierarchical model data
-# groups are the individuals (patients)
 n_individuals = 100
 
 # tot covariates
-p = 100
-prop_non_zero = 0.1
+p = 10
+prop_non_zero = 0.2
 p1 = Int(p * prop_non_zero)
 p0 = p - p1
 corr_factor = 0.5
@@ -183,7 +181,7 @@ function log_joint(theta_hat::AbstractArray{Float32}; X_batch::AbstractArray{Flo
         log_prior_beta_fixed(gamma, sigma_slab, beta_fixed) +
         log_prior_beta0_fixed(beta0_fixed)
     
-    loglik + log_prior ./ n_batches
+    loglik * n_batches + log_prior 
 end
 theta_hat = ones32(num_params) * 0.5f0
 log_joint(theta_hat; X_batch=data_dict["X"], y_batch=data_dict["y"], n_batches=1)
@@ -215,7 +213,7 @@ rand(q)
 
 
 # >>>>>>>>>>>>>>>> Manual training loop <<<<<<<<<<<<<<<<<
-num_steps = 100
+num_steps = 500
 samples_per_step = 2
 
 n_runs = 1
@@ -224,13 +222,14 @@ elbo_trace = zeros32(num_steps, n_runs)
 theta_trace = zeros32(num_steps, dim_q)
 posteriors = Dict()
 
-n_batches = 20
+n_batches = 4
 batch_size = Int(n_individuals / n_batches)
 elbo_trace_batch = zeros32(num_steps * n_batches, n_runs)
 
 
 # Random.shuffle(1:n_individuals)
 # collect(Base.Iterators.partition(Random.shuffle(1:n_individuals), batch_size))
+chain=1
 
 for chain in range(1, n_runs)
 
@@ -321,7 +320,6 @@ for chain in range(1, n_runs)
 end
 
 plot(elbo_trace, label="ELBO")
-plot(elbo_trace[500:num_steps, :], label="ELBO")
 
 plot(elbo_trace_batch, label="ELBO")
 plot(elbo_trace_batch[100:num_steps*n_batches, :], label="ELBO")

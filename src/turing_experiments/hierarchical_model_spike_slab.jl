@@ -27,6 +27,9 @@ include(joinpath("plot_functions.jl"))
 include(joinpath("../utils/classification_metrics.jl"))
 
 
+abs_project_path = normpath(joinpath(@__FILE__, "..", "..", ".."))
+
+
 # Generate hierarchical model data
 # groups are the individuals (patients)
 n_individuals = 200
@@ -35,23 +38,20 @@ n_per_ind = 5
 n_total = n_individuals * n_per_ind
 
 # tot covariates
-p = 1000
+p = 100
 prop_non_zero = 0.05
 p1 = Int(p * prop_non_zero)
 p0 = p - p1
-corr_factor = 0.2
-
-# Covariates with random effects
-d = 2
-
+corr_factor = 0.5
 
 data_dict = generate_mixed_model_data(;
     n_individuals=n_individuals, n_time_points=n_per_ind,
     p=p, p1=p1, p0=p0, corr_factor=corr_factor,
     include_random_int=true, random_intercept_sd=0.5,
     include_random_time=true, random_time_sd=0.5,
-    include_random_slope=false
+    include_random_slope=false, random_seed=Int(round(Random.rand()*1000))
 )
+
 
 cor(data_dict["y"], dims=1)
 mean(cor(data_dict["y"], dims=2), dims=1)
@@ -89,7 +89,7 @@ log_prior_gamma_logit(gamma_logit::AbstractArray{Float32}) = Distributions.logpd
 # prior sigma beta Slab
 params_dict["sigma_slab"] = OrderedDict("size" => (1), "from" => num_params+1, "to" => num_params + 1, "bij" => StatsFuns.softplus)
 num_params += 1
-prior_sigma_slab = truncated(Normal(0f0, 1f0), 0f0, Inf32)
+prior_sigma_slab = truncated(Normal(0f0, 0.5f0), 0f0, Inf32)
 log_prior_sigma_slab(sigma_slab::Float32) = Distributions.logpdf(prior_sigma_slab, sigma_slab)
 
 # prior beta
@@ -329,10 +329,10 @@ rand(q)
 
 
 # >>>>>>>>>>>>>>>> Manual training loop <<<<<<<<<<<<<<<<<
-num_steps = 5000
-samples_per_step = 2
+num_steps = 3000
+samples_per_step = 4
 
-n_runs = 2
+n_runs = 5
 elbo_trace = zeros32(num_steps, n_runs)
 theta_trace = zeros32(num_steps, dim_q)
 posteriors = Dict()
@@ -395,7 +395,14 @@ for chain in range(1, n_runs)
 end
 
 plot(elbo_trace, label="ELBO")
-plot(elbo_trace[300:num_steps, :], label="ELBO")
+
+plt = plot()
+for chain = 1:n_runs
+    plot!(elbo_trace[300:num_steps, chain], label="ELBO $(chain)")
+end
+display(plt)
+
+savefig(plt, joinpath(abs_project_path, "results", "simulations", "elbo.pdf"))
 
 
 MC_SAMPLES = 2000
@@ -413,9 +420,9 @@ display(plt)
 
 density_posterior(posterior_samples, "sigma_y", params_dict)
 
-density_posterior(posterior_samples, "beta_fixed", params_dict; plot_label=false)
+plt = density_posterior(posterior_samples, "beta_fixed", params_dict; plot_label=false)
+savefig(plt, joinpath(abs_project_path, "results", "simulations", "density_beta.pdf"))
 
-density_posterior(posterior_samples, "gamma_logit", params_dict; plot_label=false)
 
 density_posterior(posterior_samples, "sigma_slab", params_dict; plot_label=false)
 
@@ -425,19 +432,31 @@ density_posterior(posterior_samples, "sigma_beta0", params_dict; plot_label=true
 
 density_posterior(posterior_samples, "beta_time", params_dict; plot_label=true)
 
-density_posterior(posterior_samples, "beta0_random", params_dict; plot_label=false)
+plt = density_posterior(posterior_samples, "beta0_random", params_dict; plot_label=false)
 
 
 
 inclusion_probs = zeros(p, n_runs)
 for chain in range(1, n_runs)
-    samples = rand(posteriors["$(chain)"], MC_SAMPLES)
-    inclusion_probs[:, chain] = posterior_summary(samples, "gamma_logit", params_dict; fun=mean)[:,1]
+    inclusion_probs[:, chain] = posterior_summary(posterior_samples[chain], "gamma_logit", params_dict; fun=mean)[:,1]
 end
+
+inclusion_probs = 1 .- inclusion_probs
+inclusion_probs = (inclusion_probs .- minimum(inclusion_probs, dims=1)) ./ (maximum(inclusion_probs, dims=1) - minimum(inclusion_probs, dims=1))
+
+plt = plot()
+for pp in range(1, n_runs)
+    plt = scatter!(inclusion_probs[:, pp], label="Run $(pp)")
+end
+display(plt)
+savefig(plt, joinpath(abs_project_path, "results", "simulations", "inclusion_probs.pdf"))
+
+
 median_inc_prob = median(inclusion_probs, dims=2)[:, 1]
 mean_inc_prob = mean(inclusion_probs, dims=2)[:, 1]
 sum(median_inc_prob .> 0.5)
 sum(mean_inc_prob .> 0.5)
+
 
 # FDR
 classification_metrics.wrapper_metrics(
@@ -507,49 +526,25 @@ median(fdr_distribution)
 mean(tpr_distribution)
 median(tpr_distribution)
 
-histogram(n_selected_distribution, label="FDR", normalize=:probability)
+plt_hist = histogram(n_selected_distribution, label="Covs included", normalize=:probability)
+savefig(plt, joinpath(abs_project_path, "results", "simulations", "hist_n_covs_included.pdf"))
+
+mean(n_selected_distribution)
+mode(n_selected_distribution)
+median(n_selected_distribution)
 
 abs_project_path = normpath(joinpath(@__FILE__, "..", "..", ".."))
 
-fdr_plot = histogram(fdr_distribution, label="FDR", normalize=:probability)
-frequencies(fdr_distribution)
-# savefig(fdr_plot, joinpath(abs_project_path, "results", "ms_analysis", "bayesian_fdr.pdf"))
+plt_fdr = histogram(fdr_distribution, label="FDR", normalize=:probability)
+savefig(plt, joinpath(abs_project_path, "results", "simulations", "fdr_dist.pdf"))
+
+plt = plot(plt_hist, plt_fdr, layout = (1, 2))
+savefig(plt, joinpath(abs_project_path, "results", "simulations", "fdr_dist_and_hist.pdf"))
 
 tpr_plot = histogram(tpr_distribution, label="TPR", normalize=:probability)
 frequencies(tpr_distribution)
 
 mean(fdr_distribution[n_selected_distribution .== mode(n_selected_distribution)])
+mean(fdr_distribution[n_selected_distribution .== round(median(n_selected_distribution))])
 
 
-# ---------------------------------------------------------------------------
-# Inclusion indicators
-
-function logpdf_mixture(x, sigma, gamma_vec)
-    base_dist = Distributions.Normal(0f0, sigma)
-    x = x .* gamma_vec
-    hcat(
-        log.(gamma_vec) .+ Distributions.logpdf.(base_dist, x),
-        log.((1f0 .- gamma_vec) .+ Float32(1e-32))
-    )
-end
-
-chain = 1
-
-sample_class = zeros(p, MC_SAMPLES)
-
-for mc = 1:MC_SAMPLES
-    begin
-        params_names = ComponentArray(posterior_samples[chain][:, mc], proto_axes)
-    end
-    
-    gamma = params_dict["gamma_logit"]["bij"].(params_names.gamma_logit)
-    sigma_slab = params_dict["sigma_slab"]["bij"].(params_names.sigma_slab)
-    beta_fixed = params_names.beta_fixed
-
-    log_probs = logpdf_mixture(beta_fixed, sigma_slab, gamma)
-
-    sample_class[:, mc] = [rand(Categorical(StatsFuns.softmax(log_probs[j, :]))) for j = 1:p]
-end
-
-sample_class
-scatter(mean(sample_class .- 1, dims=2))
