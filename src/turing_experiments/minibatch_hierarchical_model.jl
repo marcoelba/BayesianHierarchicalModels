@@ -25,7 +25,6 @@ include(joinpath("gaussian_spike_slab.jl"))
 include(joinpath("../mixed_models/relaxed_bernoulli.jl"))
 include(joinpath("plot_functions.jl"))
 include(joinpath("../utils/classification_metrics.jl"))
-include(joinpath("../utils/get_parameters.jl"))
 
 
 abs_project_path = normpath(joinpath(@__FILE__, "..", "..", ".."))
@@ -40,7 +39,7 @@ n_total = n_individuals * n_per_ind
 
 # tot covariates
 p = 1000
-prop_non_zero = 0.025
+prop_non_zero = 0.05
 p1 = Int(p * prop_non_zero)
 p0 = p - p1
 corr_factor = 0.5
@@ -48,12 +47,11 @@ corr_factor = 0.5
 data_dict = generate_mixed_model_data(;
     n_individuals=n_individuals, n_time_points=n_per_ind,
     p=p, p1=p1, p0=p0, corr_factor=corr_factor,
-    include_random_int=true, random_intercept_sd=0.2,
+    include_random_int=true, random_intercept_sd=0.5,
     include_random_time=true, random_time_sd=0.5,
     include_random_slope=false, random_seed=Int(round(Random.rand()*1000))
 )
 
-label_files = "n$(n_individuals)_t$(n_per_ind)_p$(p)_p1$(p1)_r$(Int(corr_factor*100))"
 
 cor(data_dict["y"], dims=1)
 mean(cor(data_dict["y"], dims=2), dims=1)
@@ -63,33 +61,6 @@ println(Turing.ess(data_dict["y"], kind=:basic))
 println(Turing.ess(data_dict["y"][1, :], kind=:basic))
 println(Turing.ess(data_dict["y"][:, 1], kind=:basic))
 println(Turing.ess(reshape(data_dict["y"], (n_individuals*n_per_ind)), kind=:basic))
-
-
-function ordered_vector_bij(x::Vector{<:Float32})
-    L = length(x)
-    cumsum(vcat(x[1], StatsFuns.softplus.(x[2:L])))
-end
-
-function simplex_bij(x::Vector{<:Float32})
-    StatsFuns.softmax(vcat(x, 0f0))
-end
-
-function simplex_bij(x::Matrix{<:Float32})
-    Y = zeros(size(X, 1), size(X, 2) + 1)
-    for ii = 1:size(X, 1)
-        Y[ii, :] = StatsFuns.softmax(vcat(X[ii, :], 0f0))
-    end
-    return Y
-end
-
-function ordered_vector_bij(x::Matrix{<:Float32})
-    Y = zeros(size(x, 1), size(x, 2))
-    L = size(x, 2)
-    for ii = 1:size(x, 2)
-        Y[ii, :] = cumsum(vcat(X[ii, 1], StatsFuns.softplus.(x[ii, 2:L])))
-    end
-    return Y
-end
 
 
 """
@@ -112,13 +83,13 @@ log_prior_sigma_y(sigma_y::Float32) = Distributions.logpdf(prior_sigma_y, sigma_
 # prob Spike and Slab
 params_dict["gamma_logit"] = OrderedDict("size" => (p), "from" => num_params+1, "to" => num_params + p, "bij" => StatsFuns.logistic)
 num_params += p
-prior_gamma_logit = Turing.filldist(LogitRelaxedBernoulli(0.9f0, 0.1f0), p)
+prior_gamma_logit = Turing.filldist(LogitRelaxedBernoulli(0.5f0, 0.1f0), p)
 log_prior_gamma_logit(gamma_logit::AbstractArray{Float32}) = Distributions.logpdf(prior_gamma_logit, gamma_logit)
 
 # prior sigma beta Slab
 params_dict["sigma_slab"] = OrderedDict("size" => (1), "from" => num_params+1, "to" => num_params + 1, "bij" => StatsFuns.softplus)
 num_params += 1
-prior_sigma_slab = truncated(Normal(0f0, 0.5f0), 0f0, Inf32)
+prior_sigma_slab = truncated(Normal(0f0, 0.1f0), 0f0, Inf32)
 log_prior_sigma_slab(sigma_slab::Float32) = Distributions.logpdf(prior_sigma_slab, sigma_slab)
 
 # prior beta
@@ -190,8 +161,7 @@ num_params += 1
 prior_sigma_beta0 = truncated(Normal(0f0, 1f0), 0f0, Inf)
 log_prior_sigma_beta0(sigma_beta0::Float32) = Distributions.logpdf(prior_sigma_beta0, sigma_beta0)
 
-
-# Standard Random Intercept
+# Random Intercept
 params_dict["beta0_random"] = OrderedDict("size" => (n_individuals), "from" => num_params+1, "to" => num_params + n_individuals, "bij" => identity)
 num_params += n_individuals
 function log_prior_beta0_random(sigma_beta0::Float32, beta0_random::AbstractArray{Float32})
@@ -200,53 +170,6 @@ function log_prior_beta0_random(sigma_beta0::Float32, beta0_random::AbstractArra
         beta0_random
     )
 end
-
-# -------------- Mixture prior ----------------
-n_clusters = 5
-
-# mixing probabilities
-params_dict["beta0_rand_mix_probs"] = OrderedDict(
-    "size" => (n_clusters - 1),
-    "from" => num_params + 1, "to" => num_params + n_clusters -1,
-    "bij" => simplex_bij
-)
-num_params += n_clusters - 1
-log_prior_beta0_rand_mix_probs(x::AbstractArray{<:Float32}) = Distributions.logpdf(
-    Distributions.Dirichlet(n_clusters, 5f0), x
-)
-
-# clusters mean
-params_dict["beta0_rand_clusters_mean"] = OrderedDict(
-    "size" => (n_clusters),
-    "from" => num_params+1, "to" => num_params + n_clusters,
-    "bij" => ordered_vector_bij
-)
-num_params += n_clusters
-log_prior_beta0_rand_clusters_mean(x::AbstractArray{<:Float32}) = Distributions.logpdf(
-    Distributions.MultivariateNormal(zeros32(n_clusters), 1f0), x
-)
-
-params_dict["beta0_random"] = OrderedDict("size" => (n_individuals), "from" => num_params+1, "to" => num_params + n_individuals, "bij" => identity)
-num_params += n_individuals
-
-function log_prior_beta0_random(
-    w::AbstractArray{<:Float32},
-    mu::AbstractArray{<:Float32},
-    sd::Float32,
-    x::AbstractArray{<:Float32}
-    )
-
-    w_ext = transpose(w)
-    mu = transpose(mu)
-
-    xstd = -0.5f0 .* ((x .- mu) ./ sd).^2f0
-    wstd = w_ext ./ (sqrt(2f0 .* Float32(pi)) .* sd)
-    offset = maximum(xstd .* wstd, dims=2)
-    xe = exp.(xstd .- offset)
-    s = sum(xe .* wstd, dims=2)
-    sum(log.(s) .+ offset)
-end
-
 
 # Random time component
 params_dict["sigma_beta_time"] = OrderedDict("size" => (1), "from" => num_params+1, "to" => num_params + 1, "bij" => StatsFuns.softplus)
@@ -332,7 +255,7 @@ proto_axes = getaxes(proto_array)
 num_params = length(proto_array)
 
 
-function log_joint(theta_hat::AbstractArray{Float32})
+function log_joint(theta_hat::AbstractArray{Float32}; X_batch::AbstractArray{Float32}, y_batch::AbstractArray{Float32}, n_batches::Int64)
     begin
         params_names = ComponentArray(theta_hat, proto_axes)
     end
@@ -349,24 +272,19 @@ function log_joint(theta_hat::AbstractArray{Float32})
     # )
     beta0_fixed = params_names.beta0_fixed
     sigma_beta0 = params_dict["sigma_beta0"]["bij"].(params_names.sigma_beta0)
-
-    # If using a mixture
-    beta0_rand_mix_probs = params_dict["beta0_rand_mix_probs"]["bij"](params_names.beta0_rand_mix_probs)
-    beta0_rand_clusters_mean = params_dict["beta0_rand_clusters_mean"]["bij"](params_names.beta0_rand_clusters_mean)
-
     beta0_random = params_names.beta0_random
 
     sigma_beta_time = params_dict["sigma_beta_time"]["bij"].(params_names.sigma_beta_time)
     beta_time = params_names.beta_time
 
     loglik = log_likelihood(
-        y=data_dict["y"],
+        y=y_batch,
         beta0_fixed=beta0_fixed,
         beta0_random=beta0_random,
         beta_fixed=beta_fixed,
         beta_time=beta_time,
         sigma_y=sigma_y,
-        Xfix=data_dict["Xfix"]
+        Xfix=X_batch
     )
 
     log_prior = log_prior_sigma_y(sigma_y) +
@@ -374,18 +292,15 @@ function log_joint(theta_hat::AbstractArray{Float32})
         log_prior_sigma_slab(sigma_slab) +
         log_prior_beta_fixed(gamma, sigma_slab, beta_fixed) +
         log_prior_beta0_fixed(beta0_fixed) +
-        log_prior_beta0_rand_mix_probs(beta0_rand_mix_probs) +
-        log_prior_beta0_rand_clusters_mean(beta0_rand_clusters_mean) +
-        log_prior_beta0_random(beta0_rand_mix_probs, beta0_rand_clusters_mean, sigma_beta0, beta0_random) +
         log_prior_sigma_beta0(sigma_beta0) +
-        # log_prior_beta0_random(sigma_beta0, beta0_random) +
+        log_prior_beta0_random(sigma_beta0, beta0_random) +
         log_prior_sigma_beta_time(sigma_beta_time) +
         log_prior_beta_time(sigma_beta_time, beta_time)
     
-    loglik + log_prior
+    loglik * n_batches + log_prior
 end
 theta_hat = ones32(num_params) * 0.5f0
-log_joint(theta_hat)
+log_joint(theta_hat; X_batch=data_dict["Xfix"], y_batch=data_dict["y"], n_batches=1)
 
 # Variational Distribution
 # Provide a mapping from distribution parameters to the distribution θ ↦ q(⋅∣θ):
@@ -414,13 +329,18 @@ rand(q)
 
 
 # >>>>>>>>>>>>>>>> Manual training loop <<<<<<<<<<<<<<<<<
-num_steps = 3000
+num_steps = 1000
 samples_per_step = 4
 
-n_runs = 5
+n_runs = 1
 elbo_trace = zeros32(num_steps, n_runs)
 theta_trace = zeros32(num_steps, dim_q)
 posteriors = Dict()
+
+n_batches = 4
+batch_size = Int(n_individuals / n_batches)
+elbo_trace_batch = zeros32(num_steps * n_batches, n_runs)
+
 
 for chain in range(1, n_runs)
 
@@ -443,30 +363,54 @@ for chain in range(1, n_runs)
     prog = ProgressMeter.Progress(num_steps, 1)
     diff_results = DiffResults.GradientResult(theta)
 
+    counter = 1
+
     while (step ≤ num_steps) && !converged
-        # 1. Compute gradient and objective value; results are stored in `diff_results`
-        AdvancedVI.grad!(variational_objective, alg, getq, log_joint, theta, diff_results, samples_per_step)
+        batch_indexes = collect(Base.Iterators.partition(Random.shuffle(1:n_individuals), batch_size))
 
-        # vo(theta) = -variational_objective(alg, getq(theta), log_joint, samples_per_step)
-        
-        # loss, grads = Zygote.withgradient(theta) do params
-        #     vo(params)
-        # end
-        # Flux.Optimise.update!(optimizer, theta, grads[1])
-        # apply!(optimizer, theta, grads[1])
-        # @. theta = theta - grads[1]
+        for batch = 1:n_batches
+            X_batch = data_dict["Xfix"][batch_indexes[batch], :]
+            y_batch = data_dict["y"][batch_indexes[batch]]
 
-        # # 2. Extract gradient from `diff_result`
-        gradient_step = DiffResults.gradient(diff_results)
+            # 1. Compute gradient and objective value; results are stored in `diff_results`
+            batch_log_joint(theta_hat::AbstractArray{Float32}) = log_joint(
+                theta_hat,
+                X_batch=X_batch,
+                y_batch=y_batch,
+                n_batches=n_batches
+            )
 
-        # # 3. Apply optimizer, e.g. multiplying by step-size
-        diff_grad = apply!(optimizer, theta, gradient_step)
+            # 1. Compute gradient and objective value; results are stored in `diff_results`
+            AdvancedVI.grad!(variational_objective, alg, getq, batch_log_joint, theta, diff_results, samples_per_step)
 
-        # 4. Update parameters
-        @. theta = theta - diff_grad
+            # # 2. Extract gradient from `diff_result`
+            gradient_step = DiffResults.gradient(diff_results)
+
+            # # 3. Apply optimizer, e.g. multiplying by step-size
+            diff_grad = apply!(optimizer, theta, gradient_step)
+
+            # 4. Update parameters
+            @. theta = theta - diff_grad
+
+            elbo_trace_batch[counter, chain] = AdvancedVI.elbo(
+                alg,
+                getq(theta),
+                batch_log_joint,
+                samples_per_step
+            )
+
+            counter += 1
+        end # end bacth loop
 
         # 5. Do whatever analysis you want - Store ELBO value
-        elbo_trace[step, chain] = AdvancedVI.elbo(alg, getq(theta), log_joint, samples_per_step)
+        full_log_joint(theta_hat::AbstractArray{Float32}) = log_joint(
+            theta_hat,
+            X_batch=data_dict["Xfix"],
+            y_batch=data_dict["y"],
+            n_batches=1
+        )
+
+        elbo_trace[step, chain] = AdvancedVI.elbo(alg, getq(theta), full_log_joint, samples_per_step)
         # theta_trace[step, :] = deepcopy(theta)
 
         step += 1
@@ -487,7 +431,7 @@ for chain = 1:n_runs
 end
 display(plt)
 
-savefig(plt, joinpath(abs_project_path, "results", "simulations", "$(label_files)_elbo.pdf"))
+savefig(plt, joinpath(abs_project_path, "results", "simulations", "elbo.pdf"))
 
 
 MC_SAMPLES = 2000
@@ -499,17 +443,15 @@ end
 
 plt = plot()
 for pp in range(1, n_runs)
-    plt = scatter!(
-        posterior_summary(posterior_samples[pp], "gamma_logit", params_dict; fun=mean),
-        markersize=2.
-        )
+    plt = scatter!(posterior_summary(posterior_samples[pp], "gamma_logit", params_dict; fun=mean))
 end
 display(plt)
 
 density_posterior(posterior_samples, "sigma_y", params_dict)
 
 plt = density_posterior(posterior_samples, "beta_fixed", params_dict; plot_label=false)
-savefig(plt, joinpath(abs_project_path, "results", "simulations", "$(label_files)_density_beta.pdf"))
+savefig(plt, joinpath(abs_project_path, "results", "simulations", "density_beta.pdf"))
+
 
 density_posterior(posterior_samples, "sigma_slab", params_dict; plot_label=false)
 
@@ -521,8 +463,6 @@ density_posterior(posterior_samples, "beta_time", params_dict; plot_label=true)
 
 plt = density_posterior(posterior_samples, "beta0_random", params_dict; plot_label=false)
 
-density_posterior(posterior_samples, "beta0_rand_clusters_mean", params_dict; plot_label=true, broadcast_input=false)
-density_posterior(posterior_samples, "beta0_rand_mix_probs", params_dict; plot_label=true, broadcast_input=false)
 
 
 inclusion_probs = zeros(p, n_runs)
@@ -535,10 +475,10 @@ inclusion_probs = (inclusion_probs .- minimum(inclusion_probs, dims=1)) ./ (maxi
 
 plt = plot()
 for pp in range(1, n_runs)
-    plt = scatter!(inclusion_probs[:, pp], label="Run $(pp)", markersize=2.)
+    plt = scatter!(inclusion_probs[:, pp], label="Run $(pp)")
 end
 display(plt)
-savefig(plt, joinpath(abs_project_path, "results", "simulations", "$(label_files)_inclusion_probs.pdf"))
+savefig(plt, joinpath(abs_project_path, "results", "simulations", "inclusion_probs.pdf"))
 
 
 median_inc_prob = median(inclusion_probs, dims=2)[:, 1]
@@ -556,10 +496,6 @@ classification_metrics.wrapper_metrics(
     data_dict["beta_fixed"] .!= 0.,
     mean_inc_prob .> 0.5
 )
-
-beta_fixed = get_param(posterior_samples, "beta_fixed", params_dict)
-
-density(beta_fixed[1][p0+1:p, :]')
 
 # ------ Mirror Statistic ------
 
@@ -583,7 +519,7 @@ scatter(weighted_posterior_beta_mean)
 # Variational distribution is a Gaussian
 posterior_beta = MultivariateNormal(
     weighted_posterior_beta_mean,
-    mean(posterior_beta_sigma, dims=2)[:, 1]
+    maximum(posterior_beta_sigma, dims=2)[:, 1]
 )
 
 fdr_target = 0.1
@@ -622,8 +558,6 @@ median(tpr_distribution)
 plt_hist = histogram(n_selected_distribution, label="Covs included", normalize=:probability)
 savefig(plt, joinpath(abs_project_path, "results", "simulations", "hist_n_covs_included.pdf"))
 
-scatter(mean(selection_matrix, dims=2))
-
 mean(n_selected_distribution)
 mode(n_selected_distribution)
 median(n_selected_distribution)
@@ -634,7 +568,7 @@ plt_fdr = histogram(fdr_distribution, label="FDR", normalize=:probability)
 savefig(plt, joinpath(abs_project_path, "results", "simulations", "fdr_dist.pdf"))
 
 plt = plot(plt_hist, plt_fdr, layout = (1, 2))
-savefig(plt, joinpath(abs_project_path, "results", "simulations", "$(label_files)_fdr_dist_and_hist.pdf"))
+savefig(plt, joinpath(abs_project_path, "results", "simulations", "fdr_dist_and_hist.pdf"))
 
 tpr_plot = histogram(tpr_distribution, label="TPR", normalize=:probability)
 frequencies(tpr_distribution)
