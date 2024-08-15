@@ -48,7 +48,7 @@ corr_factor = 0.5
 data_dict = generate_mixed_model_data(;
     n_individuals=n_individuals, n_time_points=n_per_ind,
     p=p, p1=p1, p0=p0, corr_factor=corr_factor,
-    include_random_int=true, random_intercept_sd=0.2,
+    include_random_int=true, random_intercept_sd=0.2, random_int_from_pool=true,
     include_random_time=true, random_time_sd=0.5,
     include_random_slope=false, random_seed=Int(round(Random.rand()*1000))
 )
@@ -65,19 +65,19 @@ println(Turing.ess(data_dict["y"][:, 1], kind=:basic))
 println(Turing.ess(reshape(data_dict["y"], (n_individuals*n_per_ind)), kind=:basic))
 
 
-function ordered_vector_bij(x::Vector{<:Float32})
+function ordered_vector_bij(x::AbstractArray{<:Float32})
     L = length(x)
     cumsum(vcat(x[1], StatsFuns.softplus.(x[2:L])))
 end
 
-function simplex_bij(x::Vector{<:Float32})
+function simplex_bij(x::AbstractArray{<:Float32})
     StatsFuns.softmax(vcat(x, 0f0))
 end
 
 function simplex_bij(x::Matrix{<:Float32})
-    Y = zeros(size(X, 1), size(X, 2) + 1)
-    for ii = 1:size(X, 1)
-        Y[ii, :] = StatsFuns.softmax(vcat(X[ii, :], 0f0))
+    Y = zeros(size(x, 1), size(x, 2) + 1)
+    for ii = 1:size(x, 1)
+        Y[ii, :] = StatsFuns.softmax(vcat(x[ii, :], 0f0))
     end
     return Y
 end

@@ -20,8 +20,8 @@ module variable_selection_plus_inference
     function lasso_plus_ols(;
         X1::AbstractArray,
         X2::AbstractArray,
-        y1::Vector{Float64},
-        y2::Vector{Float64},
+        y1::AbstractArray,
+        y2::AbstractArray,
         add_intercept::Bool=true,
         alpha_lasso::Float64=1.
     )

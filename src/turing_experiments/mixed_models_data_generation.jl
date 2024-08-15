@@ -6,9 +6,9 @@ using ToeplitzMatrices
 
 
 function generate_mixed_model_data(;
-    n_individuals, n_time_points,
+    n_individuals, n_time_points, beta0_fixed=0,
     p, p1, p0, beta_pool=Float32.([-1., -2., 1, 2]), obs_noise_sd=1., corr_factor=0.5,
-    include_random_int=true, random_intercept_sd=0.3,
+    include_random_int=true, random_int_from_pool=true, random_intercept_sd=0.3, beta0_pool=Float32.([-2, -1.5, -0.5, 0, 0.5, 1.5, 2]),
     include_random_time=true, random_time_sd=0.5,
     include_random_slope=false, p_random_covs=0, random_slope_sd=0.5,
     random_seed=124, dtype=Float32
@@ -34,7 +34,7 @@ function generate_mixed_model_data(;
 
     # Fixed Coeffcients
     beta_fixed = dtype.(vcat(zeros(p0), Random.rand(beta_pool, p1)))
-    beta0_fixed = dtype.(1.)
+    beta0_fixed = dtype.(beta0_fixed)
 
     data_dict["beta_fixed"] = beta_fixed
     data_dict["beta0_fixed"] = beta0_fixed
@@ -43,7 +43,11 @@ function generate_mixed_model_data(;
     
     # Random Intercept (one per individual)
     if include_random_int
-        beta0_random = dtype.(Random.randn(n_individuals) .* random_intercept_sd)
+        if random_int_from_pool
+            beta0_random = sample(beta0_pool, n_individuals, replace=true)
+        else
+            beta0_random = dtype.(Random.randn(n_individuals) .* random_intercept_sd)
+        end
         data_dict["beta0_random"] = beta0_random
     end
     

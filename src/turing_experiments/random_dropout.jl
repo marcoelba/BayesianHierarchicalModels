@@ -31,7 +31,7 @@ n_individuals = 100
 
 # tot covariates
 p = 100
-prop_non_zero = 0.05
+prop_non_zero = 0.1
 p1 = Int(p * prop_non_zero)
 p0 = p - p1
 corr_factor = 0.5
@@ -62,7 +62,7 @@ log_prior_sigma_y(sigma_y::Float32) = Distributions.logpdf(prior_sigma_y, sigma_
 # prob Spike and Slab
 params_dict["gamma_logit"] = OrderedDict("size" => (p), "from" => num_params+1, "to" => num_params + p, "bij" => StatsFuns.logistic)
 num_params += p
-prior_gamma_logit = Turing.filldist(LogitRelaxedBernoulli(0.9f0, 0.1f0), p)
+prior_gamma_logit = Turing.filldist(LogitRelaxedBernoulli(0.5f0, 0.1f0), p)
 log_prior_gamma_logit(gamma_logit::AbstractArray{Float32}) = Distributions.logpdf(prior_gamma_logit, gamma_logit)
 
 # prior sigma beta Slab
@@ -201,7 +201,9 @@ n_batches = 1
 batch_size = Int(n_individuals / n_batches)
 elbo_trace_batch = zeros32(num_steps * n_batches, n_runs)
 
-p_drop = Int(p * 0.1)
+p_drop = Int(p * 0.8)
+beta_range = params_dict["beta_fixed"]["from"]:params_dict["beta_fixed"]["to"]
+inc_probs_range = params_dict["gamma_logit"]["from"]:params_dict["gamma_logit"]["to"]
 
 # Random.shuffle(1:n_individuals)
 # collect(Base.Iterators.partition(Random.shuffle(1:n_individuals), batch_size))
@@ -265,8 +267,10 @@ for chain in range(1, n_runs)
             diff_grad = apply!(optimizer, theta, gradient_step)
 
             # 4. Update parameters
-            # diff_grad[which_drop] .= 0f0
-            # diff_grad[which_drop .+ p] .= 0f0
+            diff_grad[beta_range[which_drop]] .= 0f0
+            diff_grad[beta_range[which_drop] .+ num_params] .= 0f0
+            diff_grad[inc_probs_range[which_drop]] .= 0f0
+            diff_grad[inc_probs_range[which_drop] .+ num_params] .= 0f0
 
             @. theta = theta - diff_grad
 

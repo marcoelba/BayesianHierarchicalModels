@@ -48,7 +48,7 @@ d = 2
 data_dict = generate_mixed_model_data(;
     n_individuals=n_individuals, n_time_points=n_per_ind,
     p=p, p1=p1, p0=p0, corr_factor=corr_factor,
-    include_random_int=true, random_intercept_sd=0.5,
+    include_random_int=true, random_int_from_pool=true, random_intercept_sd=0.5,
     include_random_time=true, random_time_sd=1.,
     include_random_slope=false
 )
