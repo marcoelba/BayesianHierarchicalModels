@@ -94,17 +94,19 @@ for simu = 1:n_simulations
     metrics_dict = Dict()
     mean_selection_matrix = mean(selection_matrix, dims=2)[:, 1]
     sort_indeces = sortperm(mean_selection_matrix, rev=true)    
+
     sel_vec = zeros(p)
     sel_vec[sort_indeces[1:Int(mode(n_selected_distribution))]] .= 1.
-
     metrics_dict["mode_selection_matrix"] = classification_metrics.wrapper_metrics(
         data_dict["beta"] .!= 0.,
         sel_vec .> 0.
     )
 
+    sel_vec = zeros(p)
+    sel_vec[sort_indeces[1:Int(round(mean(n_selected_distribution)))]] .= 1.
     metrics_dict["mean_selection_matrix"] = classification_metrics.wrapper_metrics(
         data_dict["beta"] .!= 0.,
-        mean_selection_matrix .> 0.5
+        sel_vec .> 0.
     )
 
     metrics_dict["mode_fdr"] = mean(fdr_distribution[n_selected_distribution .== mode(n_selected_distribution)])
@@ -122,12 +124,19 @@ total_tpr = []
 modal_fdr = []
 modal_tpr = []
 
+mean_fdr = []
+mean_tpr = []
+
 for simu = 1:n_simulations
     push!(total_fdr, simulations_metrics[simu]["mode_fdr"])
     push!(total_tpr, simulations_metrics[simu]["mode_tpr"])
 
     push!(modal_fdr, simulations_metrics[simu]["mode_selection_matrix"].fdr)
     push!(modal_tpr, simulations_metrics[simu]["mode_selection_matrix"].tpr)
+
+    push!(mean_fdr, simulations_metrics[simu]["mean_selection_matrix"].fdr)
+    push!(mean_tpr, simulations_metrics[simu]["mean_selection_matrix"].tpr)
+
 end
 
 
@@ -135,10 +144,15 @@ abs_project_path = normpath(joinpath(@__FILE__, "..", "..", ".."))
 label_files = "linear_n$(n_individuals)_p$(p)_active$(p1)_r$(Int(corr_factor*100))"
 
 plt = boxplot(modal_tpr, label=false)
+boxplot!(mean_tpr, label=false)
+boxplot!(total_tpr, label=false)
 
 savefig(plt, joinpath(abs_project_path, "results", "simulations", "$(label_files)_boxplot_tpr.pdf"))
 
-plt = boxplot(total_fdr, label=false)
+plt = boxplot(modal_fdr, label=false)
+boxplot!(mean_fdr, label=false)
+boxplot!(total_fdr, label=false)
+
 savefig(plt, joinpath(abs_project_path, "results", "simulations", "$(label_files)_boxplot_fdr.pdf"))
 
 
@@ -248,6 +262,10 @@ median(fdr_distribution)
 
 mean(tpr_distribution)
 median(tpr_distribution)
+
+for mc = 1:MC_SAMPLES
+    selection_matrix[:, mc] .* fdr_distribution[mc]
+end
 
 plt_hist = histogram(n_selected_distribution, label="Covs included", normalize=:probability)
 plt_fdr = histogram(fdr_distribution, label="FDR", normalize=:probability)
