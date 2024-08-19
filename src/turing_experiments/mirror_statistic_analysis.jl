@@ -9,101 +9,34 @@ include(joinpath("mirror_statistic.jl"))
 include(joinpath("../utils/classification_metrics.jl"))
 
 
-# Generate posterior samples from Gaussian distributions
-p = 100
-p0 = 90
-p0_wrong = 5
-p0_right = p0 - p0_wrong
-p1 = 10
-
-n = 10000
-
-Random.seed!(343)
-post_dist_null = Normal(0., 0.05)
-post_dist_wrong_null = Normal(0, 0.05)
-post_dist_active = Normal(1., 0.1)
-
-samples_null = rand(post_dist_null, (p0_right, n)) .+ randn(p0_right)*0.05
-samples_wrong_null = rand(post_dist_wrong_null, (p0_wrong, n)) .+ randn(p0_wrong)*0.05
-samples_active = rand(post_dist_active, (p1, n)) .+ randn(p1)*0.1
-
-beta_posterior = vcat(samples_null, samples_wrong_null, samples_active)
-gamma_posterior = vcat(ones(p0_right)*0.1, ones(p0_wrong)*0.1, ones(p1)*0.9)
-
-plt = plot()
-for pp in range(1, p)
-    plt = density!(beta_posterior[pp, :], label=false)
-end
-display(plt)
-
-
-# Get Mirror Stat posterior coefficients
-ms_posterior = posterior_ms_coefficients(beta_posterior)
-ms_posterior = posterior_ms_coefficients(beta_posterior .* gamma_posterior)
-
-plt = plot()
-for pp in range(1, p)
-    plt = density!(ms_posterior[pp, :], label=false)
-end
-display(plt)
-
-
-fdr_target = 0.1
-
-# Get inclusion for each MC sample
-inclusion_posterior = zeros(size(ms_posterior))
-opt_t_posterior = zeros(size(inclusion_posterior, 2))
-
-for mc in range(1, size(inclusion_posterior, 2))
-    opt_t_mc = get_t(ms_posterior[:, mc], fdr_q=fdr_target)
-    opt_t_posterior[mc] = opt_t_mc
-    inclusion_posterior[:, mc] = ms_posterior[:, mc] .> opt_t_mc
-end
-
-histogram(opt_t_posterior)
-std(opt_t_posterior)
-
-scatter(mean(inclusion_posterior, dims=2))
-sum(mean(inclusion_posterior, dims=2) .> 0.5)
-
-
-plt = plot()
-for pp in range(1, p)
-    plt = density!(ms_posterior[pp, :], label=false, color="grey")
-end
-display(plt)
-
-plt = density!(opt_t_posterior, color="red", label="opt t")
-plt = vline!(mean(opt_t_posterior, dims=1), color="red", label=false)
-
-
-sum(mean(ms_posterior, dims=2) .> mean(opt_t_posterior))
-
-
-mean(samples_wrong_null[1, :] .< 0)
-
-
-# Loop like below
+# Bayesian FDR
 p0 = 900
 p1 = 100
 p = p0 + p1
+true_coef = vcat(zeros(p0), ones(p1))
 
 mc_samples = 1000
 fdr_target = 0.1
 
 Random.seed!(35)
 
-posterior_mean_null = randn(p0) * 0.1
-posterior_mean_active = randn(p1) * 0.1 .+ 1.5
+posterior_mean_null = randn(p0) * 0.001
+posterior_mean_active = randn(p1) * 0.1 .+ 1.
 posterior_mean = vcat(posterior_mean_null, posterior_mean_active)
 
 posterior_std_null = randn(p0) * 0.01 .+ 0.1
 posterior_std_active = randn(p1) * 0.01 .+ 0.1
 posterior_std = vcat(posterior_std_null, posterior_std_active)
 
+
 posterior_gamma = vcat(
     ones(p0) * 0.01,
     ones(p1) * 0.9
+)
+
+posterior_gamma = vcat(
+    ones(p0 + 10) * 0.01,
+    ones(p1 - 10) * 0.9
 )
 
 weighted_posterior_mean = posterior_mean .* posterior_gamma
@@ -128,23 +61,96 @@ end
 display(plt)
 
 output = zeros(mc_samples)
+fdr = []
+tpr = []
+selection_matrix = zeros(p, mc_samples)
+optimal_t = []
+mirror_coefficients = zeros(p, mc_samples)
+
 
 for nn = 1:mc_samples
     beta_1 = rand(posterior)
     beta_2 = rand(posterior)
 
     mirror_coeffs = MirrorStatistic.mirror_statistic(beta_1, beta_2)
+    mirror_coefficients[:, nn] = mirror_coeffs
 
     opt_t = MirrorStatistic.get_t(mirror_coeffs; fdr_q=fdr_target)
+    push!(optimal_t, opt_t)
     output[nn] = sum(mirror_coeffs .> opt_t)
+    selection_matrix[:, nn] = (mirror_coeffs .> opt_t) * 1
+
+    metrics = classification_metrics.wrapper_metrics(
+        true_coef .> 0.,
+        mirror_coeffs .> opt_t
+    )
+    push!(fdr, metrics.fdr)
+    push!(tpr, metrics.tpr)
+
 end
 
 mean(output)
 std(output)
 
+mean(fdr)
+mode(fdr)
+
 histogram(output)
+histogram(fdr)
+
+histogram(optimal_t)
+
+mean_selection_matrix = mean(selection_matrix, dims=2)[:, 1]
+scatter(mean_selection_matrix)
+sum(mean_selection_matrix .> 0.5)
+
+classification_metrics.wrapper_metrics(
+    true_coef .> 0.,
+    mean_selection_matrix .> 0.5
+)
+
+sort_indeces = sortperm(mean_selection_matrix, rev=true)
+
+sel_vec = zeros(p)
+sel_vec[sort_indeces[1:Int(mode(output))]] .= 1.
+classification_metrics.wrapper_metrics(
+    true_coef .> 0.,
+    sel_vec .> 0.
+)
+
+sel_vec = zeros(p)
+sel_vec[sort_indeces[1:Int(round(mean(output)))]] .= 1.
+classification_metrics.wrapper_metrics(
+    true_coef .> 0.,
+    sel_vec .> 0.
+)
 
 
+range_included = Int.(sort(unique(output)))
+fdr_vec = []
+tpr_vec = []
+
+for (ii, jj) in enumerate(range_included)
+    sel_vec = zeros(p)
+    sel_vec[sort_indeces[1:jj]] .= 1.
+    met = classification_metrics.wrapper_metrics(
+        true_coef .> 0.,
+        sel_vec .> 0.
+    )
+    push!(fdr_vec, met.fdr)
+    push!(tpr_vec, met.tpr)
+end
+histogram(fdr_vec)
+
+
+plt = plot()
+for jj = 1:p
+    density!(mirror_coefficients[jj, :], label=false)
+end
+display(plt)
+
+
+# -----------------------------------------------------------
 # Simulation with two point estimates (like LASSO + OLS)
 p0 = 900
 p1 = 100

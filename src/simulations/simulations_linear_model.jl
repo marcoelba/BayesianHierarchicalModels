@@ -1,4 +1,7 @@
 # Simulations linear model
+using CSV
+using DataFrames
+
 abs_src_path = normpath(joinpath(@__FILE__, "..", ".."))
 
 include(joinpath(abs_src_path, "vi_models", "linear_model.jl"))
@@ -16,8 +19,8 @@ p0 = p - p1
 corr_factor = 0.5
 
 n_runs = 3
-num_steps = 4000
-MC_SAMPLES = 4000
+num_steps = 5000
+MC_SAMPLES = 5000
 fdr_target = 0.1
 
 n_simulations = 10
@@ -70,12 +73,14 @@ for simu = 1:n_simulations
     tpr_distribution = zeros(MC_SAMPLES)
     n_selected_distribution = zeros(MC_SAMPLES)
     selection_matrix = zeros(p, MC_SAMPLES)
+    mirror_coefficients = zeros(p, MC_SAMPLES)
 
     for nn = 1:MC_SAMPLES
         beta_1 = rand(posterior_beta)
         beta_2 = rand(posterior_beta)
 
         mirror_coeffs = MirrorStatistic.mirror_statistic(beta_1, beta_2)
+        mirror_coefficients[:, nn] = mirror_coeffs
 
         opt_t = MirrorStatistic.get_t(mirror_coeffs; fdr_q=fdr_target)
         n_selected = sum(mirror_coeffs .> opt_t)
@@ -93,7 +98,7 @@ for simu = 1:n_simulations
 
     metrics_dict = Dict()
     mean_selection_matrix = mean(selection_matrix, dims=2)[:, 1]
-    sort_indeces = sortperm(mean_selection_matrix, rev=true)    
+    sort_indeces = sortperm(mean_selection_matrix, rev=true)
 
     sel_vec = zeros(p)
     sel_vec[sort_indeces[1:Int(mode(n_selected_distribution))]] .= 1.
@@ -112,11 +117,30 @@ for simu = 1:n_simulations
     metrics_dict["mode_fdr"] = mean(fdr_distribution[n_selected_distribution .== mode(n_selected_distribution)])
     metrics_dict["mode_tpr"] = mean(tpr_distribution[n_selected_distribution .== mode(n_selected_distribution)])
 
+
+    range_included = Int.(maximum(n_selected_distribution))
+    fdr_vec = []
+    tpr_vec = []
+
+    for jj = 1:range_included
+        sel_vec = zeros(p)
+        sel_vec[sort_indeces[1:jj]] .= 1.
+        met = classification_metrics.wrapper_metrics(
+            data_dict["beta"] .!= 0.,
+            sel_vec .> 0.
+        )
+        push!(fdr_vec, met.fdr)
+        push!(tpr_vec, met.tpr)
+    end
+    histogram(fdr_vec)
+
     simulations_metrics[simu] = metrics_dict
 
 end
 
-simulations_metrics
+abs_project_path = normpath(joinpath(@__FILE__, "..", "..", ".."))
+label_files = "linear_n$(n_individuals)_p$(p)_active$(p1)_r$(Int(corr_factor*100))"
+
 
 total_fdr = []
 total_tpr = []
@@ -139,19 +163,26 @@ for simu = 1:n_simulations
 
 end
 
+all_metrics = hcat(total_fdr, mean_fdr, modal_fdr, total_tpr, mean_tpr, modal_tpr)
+df = DataFrame(all_metrics, ["total_fdr", "mean_fdr", "modal_fdr", "total_tpr", "mean_tpr", "modal_tpr"])
 
-abs_project_path = normpath(joinpath(@__FILE__, "..", "..", ".."))
-label_files = "linear_n$(n_individuals)_p$(p)_active$(p1)_r$(Int(corr_factor*100))"
+CSV.write(
+    joinpath(abs_project_path, "results", "simulations", "$(label_files).csv"),
+    df
+)
 
-plt = boxplot(modal_tpr, label=false)
-boxplot!(mean_tpr, label=false)
-boxplot!(total_tpr, label=false)
+
+plt = boxplot(modal_tpr, label="Modal TPR")
+boxplot!(mean_tpr, label="Mean TPR")
+boxplot!(total_tpr, label="Total TPR")
 
 savefig(plt, joinpath(abs_project_path, "results", "simulations", "$(label_files)_boxplot_tpr.pdf"))
 
 plt = boxplot(modal_fdr, label=false)
 boxplot!(mean_fdr, label=false)
 boxplot!(total_fdr, label=false)
+xticks!([1, 2, 3], ["1", "2", "3"])
+title!("FDR", titlefontsize=20)
 
 savefig(plt, joinpath(abs_project_path, "results", "simulations", "$(label_files)_boxplot_fdr.pdf"))
 
@@ -183,7 +214,7 @@ display(plt)
 
 density_posterior(posterior_samples, "sigma_y", params_dict)
 
-plt = density_posterior(posterior_samples, "beta_fixed", params_dict; plot_label=false)
+plt = density_posterior(posterior_samples[1:1], "beta_fixed", params_dict; plot_label=false)
 savefig(plt, joinpath(abs_project_path, "results", "simulations", "$(label_files)_density_beta.pdf"))
 
 density_posterior(posterior_samples, "sigma_spike", params_dict; plot_label=false)
@@ -276,43 +307,47 @@ savefig(plt, joinpath(abs_project_path, "results", "simulations", "$(label_files
 plt = scatter(mean(selection_matrix, dims=2), label="Mirror Coefficients inclusion freq")
 savefig(plt, joinpath(abs_project_path, "results", "simulations", "$(label_files)_selection_matrix.pdf"))
 
-mean(n_selected_distribution)
-mode(n_selected_distribution)
-median(n_selected_distribution)
-
-mean(fdr_distribution[n_selected_distribution .== mode(n_selected_distribution)])
-
-mean(fdr_distribution[n_selected_distribution .== mode(n_selected_distribution)])
-
-mean(fdr_distribution[n_selected_distribution .== round(median(n_selected_distribution))])
-mean(fdr_distribution[n_selected_distribution .== round(mean(n_selected_distribution))])
-
-mean(tpr_distribution[n_selected_distribution .== mode(n_selected_distribution)])
-mean(tpr_distribution[n_selected_distribution .== round(median(n_selected_distribution))])
-mean(tpr_distribution[n_selected_distribution .== round(mean(n_selected_distribution))])
 
 
 # ----------- Data Splitting -----------
 include(joinpath(abs_src_path, "utils", "variable_selection_plus_inference.jl"))
+ds_fdr = []
+ds_tpr = []
 
-res = variable_selection_plus_inference.lasso_plus_ols(;
+for simu = 1:n_simulations
+
+    println("Simulation: $(simu)")
+
+    data_dict = generate_linear_model_data(
+        n_individuals=n_individuals,
+        p=p, p1=p1, p0=p0, corr_factor=corr_factor,
+        random_seed=random_seed + simu
+    )
+
+    res = variable_selection_plus_inference.lasso_plus_ols(;
         X1=Float64.(data_dict["X"][1:Int(n_individuals/2), :]),
         X2=Float64.(data_dict["X"][Int(n_individuals/2)+1:end, :]),
         y1=Float64.(data_dict["y"][1:Int(n_individuals/2)]),
         y2=Float64.(data_dict["y"][Int(n_individuals/2)+1:end]),
         add_intercept=true,
         alpha_lasso=1.
-)
+    )
 
-beta_1 = res[1]
-beta_2 = res[2]
+    beta_1 = res[1]
+    beta_2 = res[2]
 
-mirror_coeffs = MirrorStatistic.mirror_statistic(beta_1, beta_2)
+    mirror_coeffs = MirrorStatistic.mirror_statistic(beta_1, beta_2)
 
-opt_t = MirrorStatistic.get_t(mirror_coeffs; fdr_q=fdr_target)
-n_selected = sum(mirror_coeffs .> opt_t)
+    opt_t = MirrorStatistic.get_t(mirror_coeffs; fdr_q=fdr_target)
+    n_selected = sum(mirror_coeffs .> opt_t)
 
-metrics = classification_metrics.wrapper_metrics(
-    data_dict["beta"] .!= 0.,
-    mirror_coeffs .> opt_t
-)
+    metrics = classification_metrics.wrapper_metrics(
+        data_dict["beta"] .!= 0.,
+        mirror_coeffs .> opt_t
+    )
+
+    push!(ds_fdr, metrics.fdr)
+    push!(ds_tpr, metrics.tpr)
+
+end
+
