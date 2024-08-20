@@ -18,7 +18,7 @@ using Zygote
 using Turing
 using AdvancedVI
 
-include(joinpath("decayed_ada_grad.jl"))
+include(joinpath("../utils/decayed_ada_grad.jl"))
 include(joinpath("mixed_models_data_generation.jl"))
 include(joinpath("mirror_statistic.jl"))
 include(joinpath("gaussian_spike_slab.jl"))
@@ -31,14 +31,15 @@ n_individuals = 200
 
 # tot covariates
 p = 1000
-prop_non_zero = 0.1
+prop_non_zero = 0.025
 p1 = Int(p * prop_non_zero)
 p0 = p - p1
 corr_factor = 0.5
 
 data_dict = generate_linear_model_data(
     n_individuals=n_individuals,
-    p=p, p1=p1, p0=p0, corr_factor=corr_factor
+    p=p, p1=p1, p0=p0, corr_factor=corr_factor,
+    random_seed=123
 )
 
 
@@ -58,34 +59,48 @@ log_prior_sigma_y(sigma_y::Float32) = Distributions.logpdf(prior_sigma_y, sigma_
 
 # Fixed effects
 
-# Normal Distribution
+# ---------- prior beta Spike-Slab ----------
+# params_dict["gamma_logit"] = OrderedDict("size" => (p), "from" => num_params+1, "to" => num_params + p, "bij" => StatsFuns.logistic)
+# num_params += p
+# prior_gamma_logit = Turing.filldist(LogitRelaxedBernoulli(0.9f0, 0.1f0), p)
+# log_prior_gamma_logit(gamma_logit::AbstractArray{Float32}) = Distributions.logpdf(prior_gamma_logit, gamma_logit)
+
+# params_dict["sigma_slab"] = OrderedDict("size" => (1), "from" => num_params+1, "to" => num_params + 1, "bij" => StatsFuns.softplus)
+# num_params += 1
+# prior_sigma_slab = truncated(Normal(0f0, 0.1f0), 0f0, Inf32)
+# log_prior_sigma_slab(sigma_slab::Float32) = Distributions.logpdf(prior_sigma_slab, sigma_slab)
+
 # params_dict["beta_fixed"] = OrderedDict("size" => (p), "from" => num_params+1, "to" => num_params + p, "bij" => identity)
 # num_params += p
-# prior_beta_fixed = Distributions.MultivariateNormal(zeros(p), 5.)
-# log_prior_beta_fixed(beta_fixed) = Distributions.logpdf(prior_beta_fixed, beta_fixed)
+# function log_prior_beta_fixed(gamma, sigma_beta, beta)
+#     base_dist_logpdf = -0.5f0 * log.(2f0 .* Float32(pi)) .- log.(sigma_beta) .- 0.5f0 .* (beta ./ sigma_beta).^2f0
+#     sum(log.(gamma .* exp.(base_dist_logpdf) .+ (1f0 .- gamma) .+ EPS))
+# end
 
-# Spike and Slab distribution
-# prob Spike and Slab
-params_dict["gamma_logit"] = OrderedDict("size" => (p), "from" => num_params+1, "to" => num_params + p, "bij" => StatsFuns.logistic)
+
+# ---------- Continuous prior ----------
+params_dict["sigma_slab"] = OrderedDict("size" => (p), "from" => num_params+1, "to" => num_params + p, "bij" => StatsFuns.softplus)
 num_params += p
-prior_gamma_logit = Turing.filldist(LogitRelaxedBernoulli(0.9f0, 0.1f0), p)
-log_prior_gamma_logit(gamma_logit::AbstractArray{Float32}) = Distributions.logpdf(prior_gamma_logit, gamma_logit)
+prior_sigma_slab = filldist(truncated(Cauchy(0f0, 1f0), 0f0, Inf32), p)
+log_prior_sigma_slab(sigma_slab::AbstractArray{Float32}) = Distributions.logpdf(
+    prior_sigma_slab,
+    sigma_slab
+)
 
-# prior sigma beta Slab
-params_dict["sigma_slab"] = OrderedDict("size" => (1), "from" => num_params+1, "to" => num_params + 1, "bij" => StatsFuns.softplus)
-num_params += 1
-prior_sigma_slab = truncated(Normal(0f0, 0.1f0), 0f0, Inf32)
-log_prior_sigma_slab(sigma_slab::Float32) = Distributions.logpdf(prior_sigma_slab, sigma_slab)
-
-# prior beta
 params_dict["beta_fixed"] = OrderedDict("size" => (p), "from" => num_params+1, "to" => num_params + p, "bij" => identity)
 num_params += p
 
-
-function log_prior_beta_fixed(gamma, sigma_beta, beta)
-    base_dist_logpdf = -0.5f0 * log.(2f0 .* Float32(pi)) .- log.(sigma_beta) .- 0.5f0 .* (beta ./ sigma_beta).^2f0
-    sum(log.(gamma .* exp.(base_dist_logpdf) .+ (1f0 .- gamma) .+ EPS))
+function log_prior_beta_fixed(sigma_vec, beta)
+    Distributions.logpdf(
+        arraydist([Distributions.Normal(0f0, sigma) for sigma in sigma_vec]),
+        beta
+    )
 end
+
+function log_prior_beta_fixed(sigma_vec::AbstractArray{Float32}, beta::AbstractArray{Float32})
+    sum(-0.5f0 * log.(2*Float32(pi)) .- log.(sigma_vec) .- 0.5f0 * (beta ./ sigma_vec).^2f0)
+end
+
 
 # Intercept
 params_dict["beta0_fixed"] = OrderedDict("size" => (1), "from" => num_params+1, "to" => num_params + 1, "bij" => identity)
@@ -140,7 +155,7 @@ function log_joint(theta_hat::AbstractArray{Float32}; X_batch::AbstractArray{Flo
 
     sigma_y = params_dict["sigma_y"]["bij"].(params_names.sigma_y)
 
-    gamma = params_dict["gamma_logit"]["bij"].(params_names.gamma_logit)
+    # gamma = params_dict["gamma_logit"]["bij"].(params_names.gamma_logit)
     sigma_slab = params_dict["sigma_slab"]["bij"].(params_names.sigma_slab)
     beta_fixed = params_names.beta_fixed
 
@@ -155,9 +170,9 @@ function log_joint(theta_hat::AbstractArray{Float32}; X_batch::AbstractArray{Flo
     )
 
     log_prior = log_prior_sigma_y(sigma_y) +
-        log_prior_gamma_logit(params_names.gamma_logit) +
+        # log_prior_gamma_logit(params_names.gamma_logit) +
         log_prior_sigma_slab(sigma_slab) +
-        log_prior_beta_fixed(gamma, sigma_slab, beta_fixed) +
+        log_prior_beta_fixed(sigma_slab, beta_fixed) +
         log_prior_beta0_fixed(beta0_fixed)
     
     loglik * n_batches + log_prior 
@@ -192,7 +207,7 @@ rand(q)
 
 
 # >>>>>>>>>>>>>>>> Manual training loop <<<<<<<<<<<<<<<<<
-num_steps = 3000
+num_steps = 2000
 samples_per_step = 4
 
 n_runs = 2
@@ -439,4 +454,27 @@ mean(fdr_distribution[n_selected_distribution .== mode(n_selected_distribution)]
 mean(fdr_distribution[n_selected_distribution .== round(median(n_selected_distribution))])
 mean(fdr_distribution[n_selected_distribution .== round(mean(n_selected_distribution))])
 
+mean_selection_matrix = mean(selection_matrix, dims=2)[:, 1]
+scatter(mean_selection_matrix)
+sum(mean_selection_matrix .> 0.5)
 
+classification_metrics.wrapper_metrics(
+    data_dict["beta"] .!= 0.,
+    mean_selection_matrix .> 0.5
+)
+
+sort_indeces = sortperm(mean_selection_matrix, rev=true)
+
+sel_vec = zeros(p)
+sel_vec[sort_indeces[1:Int(round(mean(n_selected_distribution)))]] .= 1.
+classification_metrics.wrapper_metrics(
+    data_dict["beta"] .!= 0.,
+    sel_vec .> 0.
+)
+
+sel_vec = zeros(p)
+sel_vec[sort_indeces[1:Int(round(mode(n_selected_distribution)))]] .= 1.
+classification_metrics.wrapper_metrics(
+    data_dict["beta"] .!= 0.,
+    sel_vec .> 0.
+)

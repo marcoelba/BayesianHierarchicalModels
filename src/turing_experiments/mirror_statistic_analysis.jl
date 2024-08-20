@@ -8,6 +8,9 @@ using Turing
 include(joinpath("mirror_statistic.jl"))
 include(joinpath("../utils/classification_metrics.jl"))
 
+abs_project_path = normpath(joinpath(@__FILE__, "..", "..", ".."))
+label_files = "ms_analysis"
+
 
 # Bayesian FDR
 p0 = 900
@@ -20,7 +23,7 @@ fdr_target = 0.1
 
 Random.seed!(35)
 
-posterior_mean_null = randn(p0) * 0.001
+posterior_mean_null = randn(p0) * 0.01
 posterior_mean_active = randn(p1) * 0.1 .+ 1.
 posterior_mean = vcat(posterior_mean_null, posterior_mean_active)
 
@@ -101,8 +104,11 @@ histogram(fdr)
 histogram(optimal_t)
 
 mean_selection_matrix = mean(selection_matrix, dims=2)[:, 1]
-scatter(mean_selection_matrix)
-sum(mean_selection_matrix .> 0.5)
+plt = scatter(mean_selection_matrix, label=false)
+xlabel!("Regression Coefficients", labelfontsize=15)
+ylabel!("Inclusion Probability", labelfontsize=15)
+savefig(plt, joinpath(abs_project_path, "results", "ms_analysis", "$(label_files)_mean_selection_matrix.pdf"))
+
 
 classification_metrics.wrapper_metrics(
     true_coef .> 0.,
@@ -140,7 +146,7 @@ for (ii, jj) in enumerate(range_included)
     push!(fdr_vec, met.fdr)
     push!(tpr_vec, met.tpr)
 end
-histogram(fdr_vec)
+scatter(fdr_vec)
 
 
 plt = plot()
