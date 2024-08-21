@@ -1,4 +1,4 @@
-# Linear Model
+# Logistic Model
 using Distributions
 using StatsPlots
 using Random
@@ -25,45 +25,16 @@ include(joinpath(abs_project_path, "turing_experiments", "gaussian_spike_slab.jl
 include(joinpath(abs_project_path, "mixed_models", "relaxed_bernoulli.jl"))
 
 
-function linear_model(;
+function logistic_model(;
     data_dict,
     num_steps=2000,
-    n_runs=1,
-    prior_inc_prob=0.5f0,
-    prior_sigma_spike=0.5f0
+    n_runs=1
     )
     # Prior distributions
     params_dict = OrderedDict()
     num_params = 0
 
-    # Variance
-    params_dict["sigma_y"] = OrderedDict("size" => (1), "from" => 1, "to" => 1, "bij" => StatsFuns.softplus)
-    num_params += 1
-    prior_sigma_y = truncated(Normal(0f0, 1f0), 0f0, Inf32)
-    log_prior_sigma_y(sigma_y::Float32) = Distributions.logpdf(prior_sigma_y, sigma_y)
-
     # Fixed effects
-
-    # ---------- Spike and Slab distribution ----------
-    # params_dict["gamma_logit"] = OrderedDict("size" => (p), "from" => num_params+1, "to" => num_params + p, "bij" => StatsFuns.logistic)
-    # num_params += p
-    # prior_gamma_logit = Turing.filldist(LogitRelaxedBernoulli(prior_inc_prob, 0.1f0), p)
-    # log_prior_gamma_logit(gamma_logit::AbstractArray{Float32}) = Distributions.logpdf(prior_gamma_logit, gamma_logit)
-
-    # # prior sigma beta Slab
-    # params_dict["sigma_spike"] = OrderedDict("size" => (1), "from" => num_params+1, "to" => num_params + 1, "bij" => StatsFuns.softplus)
-    # num_params += 1
-    # prior_sigma_slab = truncated(Normal(0f0, prior_sigma_spike), 0f0, Inf32)
-    # log_prior_sigma_slab(sigma_spike::Float32) = Distributions.logpdf(prior_sigma_slab, sigma_spike)
-
-    # # prior beta
-    # params_dict["beta_fixed"] = OrderedDict("size" => (p), "from" => num_params+1, "to" => num_params + p, "bij" => identity)
-    # num_params += p
-
-    # function log_prior_beta_fixed(gamma, sigma_beta, beta)
-    #     base_dist_logpdf = -0.5f0 * log.(2f0 .* Float32(pi)) .- log.(sigma_beta) .- 0.5f0 .* (beta ./ sigma_beta).^2f0
-    #     sum(log.(gamma .* exp.(base_dist_logpdf) .+ (1f0 .- gamma) .+ EPS))
-    # end
 
     # ---------- Horseshoe distribution ----------
     params_dict["sigma_beta"] = OrderedDict("size" => (p), "from" => num_params+1, "to" => num_params + p, "bij" => StatsFuns.softplus)
@@ -92,30 +63,23 @@ function linear_model(;
     function likelihood(;
         beta0_fixed::Float32,
         beta_fixed::AbstractArray{Float32},
-        sigma_y::Float32,
         Xfix::AbstractArray{Float32}
         )
-        Distributions.MultivariateNormal(
-            beta0_fixed .+ Xfix * beta_fixed,
-            sigma_y
-        )
+        lin_pred = beta0_fixed .+ Xfix * beta_fixed
+        arraydist([Distributions.BernoulliLogit(logitp) for logitp in lin_pred])
     end
 
     function log_likelihood(;
         y::AbstractArray{Float32},
         beta0_fixed::Float32,
         beta_fixed::AbstractArray{Float32},
-        sigma_y::Float32,
         Xfix::AbstractArray{Float32}
         )
-        sum(
-            Distributions.logpdf(likelihood(
-                beta0_fixed=beta0_fixed,
-                beta_fixed=beta_fixed,
-                sigma_y=sigma_y,
-                Xfix=Xfix
-            ), y)
-        )
+        Distributions.logpdf(likelihood(
+            beta0_fixed=beta0_fixed,
+            beta_fixed=beta_fixed,
+            Xfix=Xfix
+        ), y)        
     end
 
     # Joint
@@ -132,9 +96,6 @@ function linear_model(;
             params_names = ComponentArray(theta_hat, proto_axes)
         end
 
-        sigma_y = params_dict["sigma_y"]["bij"].(params_names.sigma_y)
-
-        # gamma = params_dict["gamma_logit"]["bij"].(params_names.gamma_logit)
         sigma_beta = params_dict["sigma_beta"]["bij"].(params_names.sigma_beta)
         beta_fixed = params_names.beta_fixed
 
@@ -144,13 +105,10 @@ function linear_model(;
             y=y_batch,
             beta0_fixed=beta0_fixed,
             beta_fixed=beta_fixed,
-            sigma_y=sigma_y,
             Xfix=X_batch
         )
 
-        log_prior = log_prior_sigma_y(sigma_y) +
-            # log_prior_gamma_logit(params_names.gamma_logit) +
-            log_prior_sigma_beta(sigma_beta) +
+        log_prior = log_prior_sigma_beta(sigma_beta) +
             log_prior_beta_fixed(sigma_beta, beta_fixed) +
             log_prior_beta0_fixed(beta0_fixed)
         

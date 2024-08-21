@@ -13,7 +13,7 @@ include(joinpath(abs_src_path, "utils", "classification_metrics.jl"))
 
 n_individuals = 200
 p = 1000
-prop_non_zero = 0.025
+prop_non_zero = 0.05
 p1 = Int(p * prop_non_zero)
 p0 = p - p1
 corr_factor = 0.5

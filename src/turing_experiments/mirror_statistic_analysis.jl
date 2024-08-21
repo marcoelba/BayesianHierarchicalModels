@@ -63,6 +63,32 @@ for pp = p0:p
 end
 display(plt)
 
+# mix
+plt = density(
+    rand(Normal(weighted_posterior_mean[p0], posterior_std[p0]), mc_samples),
+    label="Null", color="gray"
+)
+plt = density!(
+    rand(Normal(weighted_posterior_mean[p], posterior_std[p]), mc_samples),
+    label="Active", color="red", labelfontsize=20
+)
+for pp in range(p0-10, p0-1)
+    plt = density!(
+        rand(Normal(weighted_posterior_mean[pp], posterior_std[pp]), mc_samples),
+        label=false, color="gray"
+    )
+end
+for pp in range(p0+1, p0+10)
+    plt = density!(
+        rand(Normal(weighted_posterior_mean[pp], posterior_std[pp]), mc_samples),
+        label=false, color="red"
+    )
+end
+display(plt)
+title!("Posterior Distributions", titlefontsize=15)
+savefig(plt, joinpath(abs_project_path, "results", "ms_analysis", "$(label_files)_posterior_dists.pdf"))
+
+
 output = zeros(mc_samples)
 fdr = []
 tpr = []
@@ -93,15 +119,18 @@ for nn = 1:mc_samples
 end
 
 mean(output)
-std(output)
 
 mean(fdr)
 mode(fdr)
 
-histogram(output)
-histogram(fdr)
+plt_n = histogram(output, label="# inc. covs")
+vline!([mean(output)], color="red", label="Mean #", linewidth=5)
+plt_fdr = histogram(fdr, label="FDR")
+vline!([mean(fdr)], color="red", label="Mean FDR", linewidth=5)
 
-histogram(optimal_t)
+plt = plot(plt_fdr, plt_n)
+savefig(plt, joinpath(abs_project_path, "results", "ms_analysis", "$(label_files)_bayesian_fdr_n.pdf"))
+
 
 mean_selection_matrix = mean(selection_matrix, dims=2)[:, 1]
 plt = scatter(mean_selection_matrix, label=false)
@@ -146,7 +175,7 @@ for (ii, jj) in enumerate(range_included)
     push!(fdr_vec, met.fdr)
     push!(tpr_vec, met.tpr)
 end
-scatter(fdr_vec)
+scatter(range_included, fdr_vec)
 
 
 plt = plot()
