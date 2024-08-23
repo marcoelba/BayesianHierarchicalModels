@@ -20,26 +20,27 @@ true_coef = vcat(zeros(p0), ones(p1))
 
 mc_samples = 1000
 fdr_target = 0.1
+wrong = 20
 
 Random.seed!(35)
 
-posterior_mean_null = randn(p0) * 0.01
-posterior_mean_active = randn(p1) * 0.1 .+ 1.
+posterior_mean_null = vcat(randn(p0 - wrong) * 0.01, randn(wrong) * 0.1)
+posterior_mean_active = vcat(randn(p1 - 10) * 0.05 .+ 1., randn(10) * 0.01)
 posterior_mean = vcat(posterior_mean_null, posterior_mean_active)
 
-posterior_std_null = randn(p0) * 0.01 .+ 0.1
-posterior_std_active = randn(p1) * 0.01 .+ 0.1
+posterior_std_null = abs.(randn(p0) * 0.01) .+ 0.1
+posterior_std_active = abs.(randn(p1) * 0.2) .+ 0.1
 posterior_std = vcat(posterior_std_null, posterior_std_active)
 
 
 posterior_gamma = vcat(
-    ones(p0) * 0.01,
+    ones(p0) * 0.1,
     ones(p1) * 0.9
 )
 
 posterior_gamma = vcat(
-    ones(p0 + 10) * 0.01,
-    ones(p1 - 10) * 0.9
+    ones(p0 - wrong) * 0.1,
+    ones(p1 + wrong) * 0.9
 )
 
 weighted_posterior_mean = posterior_mean .* posterior_gamma
@@ -58,7 +59,7 @@ display(plt)
 
 # non-null
 plt = plot()
-for pp = p0:p
+for pp = p0+1:p
     plt = density!(rand(Normal(weighted_posterior_mean[pp], posterior_std[pp]), mc_samples), label=false)
 end
 display(plt)
@@ -183,6 +184,13 @@ for jj = 1:p
     density!(mirror_coefficients[jj, :], label=false)
 end
 display(plt)
+vline!([mean(optimal_t)], label=false, linewidth=5)
+
+sum(mean(mirror_coefficients, dims=2) .> mean(optimal_t))
+classification_metrics.wrapper_metrics(
+    true_coef .!= 0.,
+    mean(mirror_coefficients, dims=2)[:, 1] .> mean(optimal_t)
+)
 
 
 # -----------------------------------------------------------

@@ -28,7 +28,12 @@ include(joinpath(abs_project_path, "mixed_models", "relaxed_bernoulli.jl"))
 function logistic_model(;
     data_dict,
     num_steps=2000,
-    n_runs=1
+    n_runs=1,
+    n_batches=1,
+    samples_per_step=4,
+    theta_start=false,
+    theta_init_noise=0.1f0,
+    sigma_cauchy=1f0
     )
     # Prior distributions
     params_dict = OrderedDict()
@@ -39,9 +44,8 @@ function logistic_model(;
     # ---------- Horseshoe distribution ----------
     params_dict["sigma_beta"] = OrderedDict("size" => (p), "from" => num_params+1, "to" => num_params + p, "bij" => StatsFuns.softplus)
     num_params += p
-    prior_sigma_slab = truncated(Cauchy(0f0, 1f0), 0f0, Inf32)
     log_prior_sigma_beta(sigma_beta::AbstractArray{Float32}) = sum(Distributions.logpdf.(
-        prior_sigma_slab,
+        truncated(Cauchy(0f0, sigma_cauchy), 0f0, Inf32),
         sigma_beta
     ))
     
@@ -70,7 +74,7 @@ function logistic_model(;
     end
 
     function log_likelihood(;
-        y::AbstractArray{Float32},
+        y::AbstractArray,
         beta0_fixed::Float32,
         beta_fixed::AbstractArray{Float32},
         Xfix::AbstractArray{Float32}
@@ -91,7 +95,7 @@ function logistic_model(;
     num_params = length(proto_array)
 
 
-    function log_joint(theta_hat::AbstractArray{Float32}; X_batch::AbstractArray{Float32}, y_batch::AbstractArray{Float32}, n_batches::Int64)
+    function log_joint(theta_hat::AbstractArray{Float32}; X_batch::AbstractArray{Float32}, y_batch::AbstractArray, n_batches::Int64)
         begin
             params_names = ComponentArray(theta_hat, proto_axes)
         end
@@ -132,16 +136,16 @@ function logistic_model(;
 
     # >>>>>>>>>>>>>>>> Manual training loop <<<<<<<<<<<<<<<<<
     num_steps = num_steps
-    samples_per_step = 4
+    samples_per_step = samples_per_step
 
     n_runs = n_runs
     elbo_trace = zeros32(num_steps, n_runs)
 
     posteriors = Dict()
 
-    n_batches = 1
     batch_size = Int(n_individuals / n_batches)
     elbo_trace_batch = zeros32(num_steps * n_batches, n_runs)
+    theta = randn32(dim_q)
 
     for chain in range(1, n_runs)
 
@@ -159,7 +163,11 @@ function logistic_model(;
         # --- Train loop ---
         converged = false
         step = 1
-        theta = randn32(dim_q) * 0.2f0
+        if length(theta_start) > 1
+            theta = theta_start
+        else
+            theta = randn32(dim_q) * theta_init_noise
+        end
 
         prog = ProgressMeter.Progress(num_steps, 1)
         diff_results = DiffResults.GradientResult(theta)
@@ -230,6 +238,6 @@ function logistic_model(;
 
     end
 
-    return posteriors, elbo_trace, elbo_trace_batch, params_dict
+    return posteriors, elbo_trace, elbo_trace_batch, params_dict, theta
 
 end

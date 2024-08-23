@@ -3,6 +3,7 @@ using Distributions
 using Random
 using LinearAlgebra
 using ToeplitzMatrices
+using StatsFuns
 
 
 function generate_mixed_model_data(;
@@ -126,6 +127,48 @@ function generate_linear_model_data(;
     # Outcome
     y = Xfix * beta_fixed .+ beta0_fixed + randn(n_individuals) .* obs_noise_sd
     data_dict["y"] = dtype.(y)
+
+    return data_dict
+end
+
+
+function generate_logistic_model_data(;
+    n_individuals, class_threshold=0.5f0,
+    p, p1, p0, beta_pool=Float32.([-1., -2., 1, 2]), obs_noise_sd=0.1, corr_factor=0.5,
+    random_seed=124, dtype=Float32
+    )
+
+    data_dict = Dict()
+
+    Random.seed!(random_seed)
+
+    # block covariance matrix
+    cor_coefs_0 = vcat([1.], [corr_factor * (p0 - ll) / (p0 - 1) for ll in range(1, p0-1)])
+    cor_coefs_1 = vcat([1.], [corr_factor * (p1 - ll) / (p1 - 1) for ll in range(1, p1-1)])
+    cov_matrix_0 = Array(Toeplitz(cor_coefs_0, cor_coefs_0))
+    cov_matrix_1 = Array(Toeplitz(cor_coefs_1, cor_coefs_1))
+
+    Xfix_0 = rand(MultivariateNormal(cov_matrix_0), n_individuals)
+    Xfix_1 = rand(MultivariateNormal(cov_matrix_1), n_individuals)
+    Xfix = transpose(vcat(Xfix_0, Xfix_1))
+
+    data_dict["X"] = dtype.(Xfix)
+
+    # Fixed Coeffcients
+    beta_fixed = dtype.(vcat(zeros(p0), Random.rand(beta_pool, p1)))
+    beta0_fixed = dtype.(1.)
+
+    data_dict["beta"] = beta_fixed
+    data_dict["beta0"] = beta0_fixed
+    
+    # Outcome
+    lin_pred = Xfix * beta_fixed .+ beta0_fixed .+ randn(n_individuals) .* obs_noise_sd
+    data_dict["y_logit"] = dtype.(lin_pred)
+
+    # y_dist = arraydist([Distributions.Bernoulli(StatsFuns.logistic(logitp)) for logitp in lin_pred])
+    # y = rand(y_dist)
+    y = StatsFuns.logistic.(lin_pred) .> class_threshold
+    data_dict["y"] = Int.(y)
 
     return data_dict
 end

@@ -38,12 +38,12 @@ Distributions.maximum(d::LogitRelaxedBernoulli) = +Inf
 
 
 # Test
-# probs = [0.1, 0.6]
+# probs = 0.1
 # logits = log.(probs ./ (1 .- probs))
 # temp = 0.1
-# x = LogitRelaxedBernoulli.(probs, temp)
+# x = LogitRelaxedBernoulli(probs, temp)
 
-# sam = Distributions.rand.(x)
+# sam = [-30., 10.]
 # Distributions.logpdf.(x, sam)
 
 # probs = 0.3
