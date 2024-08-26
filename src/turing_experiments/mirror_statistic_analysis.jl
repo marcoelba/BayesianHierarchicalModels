@@ -5,10 +5,10 @@ using Random
 using LinearAlgebra
 using Turing
 
-include(joinpath("mirror_statistic.jl"))
-include(joinpath("../utils/classification_metrics.jl"))
-
 abs_project_path = normpath(joinpath(@__FILE__, "..", "..", ".."))
+include(joinpath(abs_project_path, "src", "utils", "mirror_statistic.jl"))
+include(joinpath(abs_project_path, "src", "utils", "classification_metrics.jl"))
+
 label_files = "ms_analysis"
 
 
@@ -20,12 +20,14 @@ true_coef = vcat(zeros(p0), ones(p1))
 
 mc_samples = 1000
 fdr_target = 0.1
-wrong = 20
+fp = 20
+fn = 10
 
 Random.seed!(35)
 
-posterior_mean_null = vcat(randn(p0 - wrong) * 0.01, randn(wrong) * 0.1)
-posterior_mean_active = vcat(randn(p1 - 10) * 0.05 .+ 1., randn(10) * 0.01)
+posterior_mean_null = vcat(zeros(p0 - fp) * 0.01, rand([-0.2, 0.2], fp))
+posterior_mean_active = vcat(randn(p1 - fn) * 0.05 .+ 1., randn(fn) * 0.01)
+
 posterior_mean = vcat(posterior_mean_null, posterior_mean_active)
 
 posterior_std_null = abs.(randn(p0) * 0.01) .+ 0.1
@@ -33,17 +35,7 @@ posterior_std_active = abs.(randn(p1) * 0.2) .+ 0.1
 posterior_std = vcat(posterior_std_null, posterior_std_active)
 
 
-posterior_gamma = vcat(
-    ones(p0) * 0.1,
-    ones(p1) * 0.9
-)
-
-posterior_gamma = vcat(
-    ones(p0 - wrong) * 0.1,
-    ones(p1 + wrong) * 0.9
-)
-
-weighted_posterior_mean = posterior_mean .* posterior_gamma
+weighted_posterior_mean = posterior_mean
 scatter(weighted_posterior_mean)
 
 posterior = arraydist([
@@ -139,13 +131,23 @@ xlabel!("Regression Coefficients", labelfontsize=15)
 ylabel!("Inclusion Probability", labelfontsize=15)
 savefig(plt, joinpath(abs_project_path, "results", "ms_analysis", "$(label_files)_mean_selection_matrix.pdf"))
 
-
 classification_metrics.wrapper_metrics(
     true_coef .> 0.,
     mean_selection_matrix .> 0.5
 )
 
 sort_indeces = sortperm(mean_selection_matrix, rev=true)
+
+selection = mean_selection_matrix .> 0.5
+extra = Int(round(sum(selection) * (0.1 / 0.9)))
+selection[
+    sort_indeces[sum(selection) + 1:sum(selection) + extra]
+] .= 1
+
+classification_metrics.wrapper_metrics(
+    true_coef .!= 0.,
+    selection .> 0
+)
 
 sel_vec = zeros(p)
 sel_vec[sort_indeces[1:Int(mode(output))]] .= 1.
@@ -230,3 +232,17 @@ gamma_dist = truncated(Normal(0, 0.1), -0.3, 0.2)
 mean(gamma_dist)
 mean(rand(gamma_dist, 10000))
 density(rand(gamma_dist, 10000))
+
+
+###
+x = Normal(1., 2)
+
+y1 = abs.(rand(x, 1000) .+ rand(x, 1000))
+y2 = abs.(rand(x, 1000) .- rand(x, 1000))
+y = y1 .- y2
+
+density(rand(x, 1000), label="Coef")
+density!(y, label="MS")
+density!(y1, label="+")
+density!(y2, label="-")
+

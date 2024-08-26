@@ -30,7 +30,7 @@ function mirror_statistic(theta_1, theta_2; type=1)
     if type == 1
         ms = abs.(theta_1 .+ theta_2) .- abs.(theta_1 .- theta_2)
     elseif type == 2
-        ms = sign.(theta_1 .* theta_2) .* (abs(theta_1) .+ abs(theta_2))
+        ms = sign.(theta_1 .* theta_2) .* (abs.(theta_1) .+ abs.(theta_2))
     end
 
     return ms

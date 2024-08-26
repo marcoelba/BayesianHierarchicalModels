@@ -6,19 +6,19 @@ abs_src_path = normpath(joinpath(@__FILE__, "..", ".."))
 
 include(joinpath(abs_src_path, "vi_models", "logistic_model.jl"))
 include(joinpath(abs_src_path, "utils", "mixed_models_data_generation.jl"))
-include(joinpath(abs_src_path, "turing_experiments", "mirror_statistic.jl"))
+include(joinpath(abs_src_path, "utils", "mirror_statistic.jl"))
 include(joinpath(abs_src_path, "turing_experiments", "plot_functions.jl"))
 include(joinpath(abs_src_path, "utils", "classification_metrics.jl"))
 
 
 n_individuals = 200
-p = 50
-prop_non_zero = 0.1
+p = 400
+prop_non_zero = 0.05
 p1 = Int(p * prop_non_zero)
 p0 = p - p1
 corr_factor = 0.5
 
-n_runs = 3
+n_runs = 2
 num_steps = 3000
 MC_SAMPLES = 3000
 fdr_target = 0.1
@@ -41,7 +41,8 @@ for simu = 1:n_simulations
     posteriors, elbo_trace, elbo_trace_batch, params_dict = logistic_model(;
         data_dict=data_dict,
         num_steps=num_steps,
-        n_runs=n_runs
+        n_runs=n_runs,
+        sigma_cauchy=0.1f0
     )
 
     simulations_models[simu] = (posteriors, elbo_trace, params_dict)
@@ -110,6 +111,16 @@ for simu = 1:n_simulations
         sel_vec .> 0.
     )
 
+    selection = mean_selection_matrix .> 0.5
+    extra = Int(round(sum(selection) * (0.1 / 0.9)))
+    selection[
+        sort_indeces[sum(selection) + 1:sum(selection) + extra]
+    ] .= 1
+    metrics_dict["extra_selection_matrix"] = classification_metrics.wrapper_metrics(
+        data_dict["beta"] .!= 0.,
+        selection .> 0
+    )
+
     simulations_metrics[simu] = metrics_dict
 
 end
@@ -124,6 +135,9 @@ modal_tpr = []
 mean_fdr = []
 mean_tpr = []
 
+extra_fdr = []
+extra_tpr = []
+
 for simu = 1:n_simulations
     push!(modal_fdr, simulations_metrics[simu]["mode_selection_matrix"].fdr)
     push!(modal_tpr, simulations_metrics[simu]["mode_selection_matrix"].tpr)
@@ -131,10 +145,16 @@ for simu = 1:n_simulations
     push!(mean_fdr, simulations_metrics[simu]["mean_selection_matrix"].fdr)
     push!(mean_tpr, simulations_metrics[simu]["mean_selection_matrix"].tpr)
 
+    push!(extra_fdr, simulations_metrics[simu]["extra_selection_matrix"].fdr)
+    push!(extra_tpr, simulations_metrics[simu]["extra_selection_matrix"].tpr)
+
 end
 
-all_metrics = hcat(mean_fdr, modal_fdr, mean_tpr, modal_tpr)
-df = DataFrame(all_metrics, ["mean_fdr", "modal_fdr", "mean_tpr", "modal_tpr"])
+all_metrics = hcat(mean_fdr, modal_fdr, extra_fdr, mean_tpr, modal_tpr, extra_tpr)
+df = DataFrame(
+    all_metrics,
+    ["mean_fdr", "modal_fdr", "extra_fdr", "mean_tpr", "modal_tpr", "extra_tpr"]
+)
 
 CSV.write(
     joinpath(abs_project_path, "results", "simulations", "$(label_files).csv"),
@@ -144,12 +164,14 @@ CSV.write(
 
 plt_tpr = boxplot(mean_tpr, label=false)
 boxplot!(modal_tpr, label=false)
-xticks!([1, 2], ["Mean", "Mode"], tickfontsize=10)
+boxplot!(extra_tpr, label=false)
+xticks!([1, 2, 3], ["Mean", "Mode", "Extra"], tickfontsize=10)
 title!("TPR", titlefontsize=20)
 
 plt_fdr = boxplot(mean_fdr, label=false)
 boxplot!(modal_fdr, label=false)
-xticks!([1, 2], ["Mean", "Mode"], tickfontsize=10)
+boxplot!(extra_fdr, label=false)
+xticks!([1, 2, 3], ["Mean", "Mode", "Extra"], tickfontsize=10)
 title!("FDR", titlefontsize=20)
 
 plt = plot(plt_fdr, plt_tpr)
@@ -226,7 +248,7 @@ std(data_dict["y"], dims=1)
 mean(data_dict["y"])
 
 n_runs = 2
-num_steps = 2000
+num_steps = 3000
 posteriors, elbo_trace, elbo_trace_batch, params_dict, theta_optim = logistic_model(;
     data_dict=data_dict,
     num_steps=num_steps,
@@ -234,7 +256,7 @@ posteriors, elbo_trace, elbo_trace_batch, params_dict, theta_optim = logistic_mo
     n_batches=1,
     theta_start=false,
     theta_init_noise=0.1f0,
-    sigma_cauchy=0.1f0
+    sigma_cauchy=3f0
 )
 
 plt = plot()
@@ -312,6 +334,8 @@ for nn = 1:MC_SAMPLES
     tpr_distribution[nn] = metrics.tpr
 end
 
+mean(fdr_distribution)
+
 plt_fdr = histogram(fdr_distribution, label=false, normalize=true)
 xlabel!("FDR", labelfontsize=15)
 plt_n = histogram(n_selected_distribution, label=false, normalize=true)
@@ -342,12 +366,6 @@ classification_metrics.wrapper_metrics(
 density(ms', label=false)
 vline!([mean(optimal_t)], label=false)
 
-sum(mean(ms, dims=2) .> mean(optimal_t))
-classification_metrics.wrapper_metrics(
-    data_dict["beta"] .!= 0.,
-    mean(ms, dims=2)[:, 1] .> mean(optimal_t)
-)
-
 
 range_included = Int.(maximum(n_selected_distribution))
 fdr_vec = []
@@ -369,4 +387,49 @@ scatter!(tpr_vec, label="TPR")
 xlabel!("# Included Variables", labelfontsize=15)
 # title!("FDR", titlefontsize=20)
 savefig(plt, joinpath(abs_project_path, "results", "simulations", "$(label_files)_fdrtpr_scatter.pdf"))
+
+
+selection = mean_selection_matrix .> 0.5
+sum(selection)
+extra = Int(round(sum(selection) * (0.1 / 0.9)))
+selection[
+    sort_indeces[sum(selection) + 1:sum(selection) + extra]
+] .= 1
+
+classification_metrics.wrapper_metrics(
+    data_dict["beta"] .!= 0.,
+    selection .> 0
+)
+
+
+
+for nn = 1:MC_SAMPLES
+
+    beta_1 = rand(posterior_beta)
+    beta_2 = rand(posterior_beta)
+    mirror_coeffs = MirrorStatistic.mirror_statistic(beta_1, beta_2)
+    scatter(mirror_coeffs)
+
+    optimal_t = 0
+    fdp = 0
+
+    for t in range(minimum(abs.(mirror_coeffs)), maximum(mirror_coeffs), length=100)
+        n_left_tail = sum(mirror_coeffs .< -t)
+        n_right_tail = sum(mirror_coeffs .> t)
+        n_right_tail = ifelse(n_right_tail .> 0, n_right_tail, 1)
+
+        fdp = n_left_tail / n_right_tail
+
+        if fdp <= fdr_target
+            optimal_t = t
+            break
+        end
+    end
+end
+sum(mirror_coeffs .> optimal_t)
+
+classification_metrics.wrapper_metrics(
+    data_dict["beta"] .!= 0.,
+    mirror_coeffs .> optimal_t
+)
 
