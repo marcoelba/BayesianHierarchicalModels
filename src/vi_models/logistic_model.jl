@@ -50,7 +50,7 @@ function logistic_model(;
     ))
     
     params_dict["beta_fixed"] = OrderedDict("size" => (p), "from" => num_params+1, "to" => num_params + p, "bij" => identity)
-    num_params += p 
+    num_params += p
     function log_prior_beta_fixed(sigma_beta::AbstractArray{Float32}, beta::AbstractArray{Float32})
         sum(-0.5f0 * log.(2*Float32(pi)) .- log.(sigma_beta) .- 0.5f0 * (beta ./ sigma_beta).^2f0)
     end

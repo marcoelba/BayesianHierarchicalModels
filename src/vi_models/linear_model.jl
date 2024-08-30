@@ -28,9 +28,7 @@ include(joinpath(abs_project_path, "mixed_models", "relaxed_bernoulli.jl"))
 function linear_model(;
     data_dict,
     num_steps=2000,
-    n_runs=1,
-    prior_inc_prob=0.5f0,
-    prior_sigma_spike=0.5f0
+    n_runs=1
     )
     # Prior distributions
     params_dict = OrderedDict()
@@ -43,34 +41,11 @@ function linear_model(;
     log_prior_sigma_y(sigma_y::Float32) = Distributions.logpdf(prior_sigma_y, sigma_y)
 
     # Fixed effects
-
-    # ---------- Spike and Slab distribution ----------
-    # params_dict["gamma_logit"] = OrderedDict("size" => (p), "from" => num_params+1, "to" => num_params + p, "bij" => StatsFuns.logistic)
-    # num_params += p
-    # prior_gamma_logit = Turing.filldist(LogitRelaxedBernoulli(prior_inc_prob, 0.1f0), p)
-    # log_prior_gamma_logit(gamma_logit::AbstractArray{Float32}) = Distributions.logpdf(prior_gamma_logit, gamma_logit)
-
-    # # prior sigma beta Slab
-    # params_dict["sigma_spike"] = OrderedDict("size" => (1), "from" => num_params+1, "to" => num_params + 1, "bij" => StatsFuns.softplus)
-    # num_params += 1
-    # prior_sigma_slab = truncated(Normal(0f0, prior_sigma_spike), 0f0, Inf32)
-    # log_prior_sigma_slab(sigma_spike::Float32) = Distributions.logpdf(prior_sigma_slab, sigma_spike)
-
-    # # prior beta
-    # params_dict["beta_fixed"] = OrderedDict("size" => (p), "from" => num_params+1, "to" => num_params + p, "bij" => identity)
-    # num_params += p
-
-    # function log_prior_beta_fixed(gamma, sigma_beta, beta)
-    #     base_dist_logpdf = -0.5f0 * log.(2f0 .* Float32(pi)) .- log.(sigma_beta) .- 0.5f0 .* (beta ./ sigma_beta).^2f0
-    #     sum(log.(gamma .* exp.(base_dist_logpdf) .+ (1f0 .- gamma) .+ EPS))
-    # end
-
     # ---------- Horseshoe distribution ----------
     params_dict["sigma_beta"] = OrderedDict("size" => (p), "from" => num_params+1, "to" => num_params + p, "bij" => StatsFuns.softplus)
     num_params += p
-    prior_sigma_slab = truncated(Cauchy(0f0, 1f0), 0f0, Inf32)
     log_prior_sigma_beta(sigma_beta::AbstractArray{Float32}) = sum(Distributions.logpdf.(
-        prior_sigma_slab,
+        truncated(Cauchy(0f0, 1f0), 0f0, Inf32),
         sigma_beta
     ))
     

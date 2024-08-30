@@ -10,7 +10,7 @@ function generate_mixed_model_data(;
     n_individuals, n_time_points, beta0_fixed=0,
     p, p1, p0, beta_pool=Float32.([-1., -2., 1, 2]), obs_noise_sd=1., corr_factor=0.5,
     include_random_int=true, random_int_from_pool=true, random_intercept_sd=0.3, beta0_pool=Float32.([-2, -1.5, -0.5, 0, 0.5, 1.5, 2]),
-    include_random_time=true, random_time_sd=0.5,
+    include_random_time=true, beta_time=Float32.(range(0, 1., length=n_time_points)),
     include_random_slope=false, p_random_covs=0, random_slope_sd=0.5,
     random_seed=124, dtype=Float32
     )
@@ -54,7 +54,6 @@ function generate_mixed_model_data(;
     
     # Random Time effect
     if include_random_time
-        beta_time = dtype.(Random.randn(n_time_points) .* random_time_sd)
         data_dict["beta_time"] = beta_time
     end
 

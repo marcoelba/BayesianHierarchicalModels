@@ -5,9 +5,9 @@ using DataFrames
 abs_src_path = normpath(joinpath(@__FILE__, "..", ".."))
 
 include(joinpath(abs_src_path, "vi_models", "linear_model.jl"))
-include(joinpath(abs_src_path, "turing_experiments", "mixed_models_data_generation.jl"))
-include(joinpath(abs_src_path, "turing_experiments", "mirror_statistic.jl"))
-include(joinpath(abs_src_path, "turing_experiments", "plot_functions.jl"))
+include(joinpath(abs_src_path, "utils", "mixed_models_data_generation.jl"))
+include(joinpath(abs_src_path, "utils", "mirror_statistic.jl"))
+include(joinpath(abs_src_path, "utils", "plot_functions.jl"))
 include(joinpath(abs_src_path, "utils", "classification_metrics.jl"))
 
 
@@ -19,8 +19,8 @@ p0 = p - p1
 corr_factor = 0.5
 
 n_runs = 3
-num_steps = 3000
-MC_SAMPLES = 3000
+num_steps = 2000
+MC_SAMPLES = 2000
 fdr_target = 0.1
 
 n_simulations = 10
@@ -57,15 +57,24 @@ for simu = 1:n_simulations
         posterior_beta_sigma[:, chain] = sqrt.(posteriors["$(chain)"].Σ.diag[params_dict["beta_fixed"]["from"]:params_dict["beta_fixed"]["to"]])
     end
 
-    weighted_posterior_beta_mean = mean(posterior_beta_mean, dims=2)[:, 1]
+    posterior_beta_mean = mean(posterior_beta_mean, dims=2)[:, 1]
+    posterior_beta_sigma = mean(posterior_beta_sigma, dims=2)[:, 1]
 
     # Variational distribution is a Gaussian
     posterior_beta = MultivariateNormal(
-        weighted_posterior_beta_mean,
-        mean(posterior_beta_sigma, dims=2)[:, 1]
+        posterior_beta_mean,
+        posterior_beta_sigma
     )
 
-    # density(rand(posterior_beta, MC_SAMPLES)')
+    # MS Distribution
+    mean_vec = MirrorStatistic.mean_folded_normal.(posterior_beta_mean, posterior_beta_sigma) .- 
+        MirrorStatistic.mean_folded_normal.(0., posterior_beta_sigma)
+    var_vec = MirrorStatistic.var_folded_normal.(posterior_beta_mean, posterior_beta_sigma) .+ 
+        MirrorStatistic.var_folded_normal.(0., posterior_beta_sigma)
+
+    ms_dist_vec = arraydist([
+        Normal(mean_ms, sqrt(var_ms)) for (mean_ms, var_ms) in zip(mean_vec, var_vec)
+    ])
 
     fdr_distribution = zeros(MC_SAMPLES)
     tpr_distribution = zeros(MC_SAMPLES)
@@ -73,10 +82,11 @@ for simu = 1:n_simulations
     selection_matrix = zeros(p, MC_SAMPLES)
 
     for nn = 1:MC_SAMPLES
-        beta_1 = rand(posterior_beta)
-        beta_2 = rand(posterior_beta)
+        # beta_1 = rand(posterior_beta)
+        # beta_2 = rand(posterior_beta)
+        # mirror_coeffs = MirrorStatistic.mirror_statistic(beta_1, beta_2)
 
-        mirror_coeffs = MirrorStatistic.mirror_statistic(beta_1, beta_2)
+        mirror_coeffs = rand(ms_dist_vec)
 
         opt_t = MirrorStatistic.get_t(mirror_coeffs; fdr_q=fdr_target)
         n_selected = sum(mirror_coeffs .> opt_t)
@@ -110,21 +120,15 @@ for simu = 1:n_simulations
         sel_vec .> 0.
     )
 
-    # range_included = Int.(maximum(n_selected_distribution))
-    # fdr_vec = []
-    # tpr_vec = []
-
-    # for jj = 1:range_included
-    #     sel_vec = zeros(p)
-    #     sel_vec[sort_indeces[1:jj]] .= 1.
-    #     met = classification_metrics.wrapper_metrics(
-    #         data_dict["beta"] .!= 0.,
-    #         sel_vec .> 0.
-    #     )
-    #     push!(fdr_vec, met.fdr)
-    #     push!(tpr_vec, met.tpr)
-    # end
-    # histogram(fdr_vec)
+    selection = mean_selection_matrix .> 0.5
+    extra = Int(round(sum(selection) * (0.1 / 0.9)))
+    selection[
+        sort_indeces[sum(selection) + 1:sum(selection) + extra]
+    ] .= 1
+    metrics_dict["extra_selection_matrix"] = classification_metrics.wrapper_metrics(
+        data_dict["beta"] .!= 0.,
+        selection .> 0
+    )
 
     simulations_metrics[simu] = metrics_dict
 
@@ -253,17 +257,27 @@ for chain = 1:n_runs
     posterior_beta_sigma[:, chain] = sqrt.(posteriors["$(chain)"].Σ.diag[params_dict["beta_fixed"]["from"]:params_dict["beta_fixed"]["to"]])
 end
 
-weighted_posterior_beta_mean = mean(posterior_beta_mean, dims=2)[:, 1]
+posterior_beta_mean = mean(posterior_beta_mean, dims=2)[:, 1]
+posterior_beta_sigma = mean(posterior_beta_sigma, dims=2)[:, 1]
 
 # Variational distribution is a Gaussian
 posterior_beta = MultivariateNormal(
-    weighted_posterior_beta_mean,
-    mean(posterior_beta_sigma, dims=2)[:, 1]
+    posterior_beta_mean,
+    posterior_beta_sigma
 )
 
 plt = density(rand(posterior_beta, MC_SAMPLES)', label=false)
 savefig(plt, joinpath(abs_project_path, "results", "simulations", "$(label_files)_posterior_beta.pdf"))
 
+# MS Distribution
+mean_vec = MirrorStatistic.mean_folded_normal.(posterior_beta_mean, posterior_beta_sigma) .- 
+    MirrorStatistic.mean_folded_normal.(0., posterior_beta_sigma)
+var_vec = MirrorStatistic.var_folded_normal.(posterior_beta_mean, posterior_beta_sigma) .+ 
+    MirrorStatistic.var_folded_normal.(0., posterior_beta_sigma)
+
+ms_dist_vec = arraydist([
+    Normal(mean_ms, sqrt(var_ms)) for (mean_ms, var_ms) in zip(mean_vec, var_vec)
+])
 
 fdr_distribution = zeros(MC_SAMPLES)
 tpr_distribution = zeros(MC_SAMPLES)
@@ -271,10 +285,11 @@ n_selected_distribution = zeros(MC_SAMPLES)
 selection_matrix = zeros(p, MC_SAMPLES)
 
 for nn = 1:MC_SAMPLES
-    beta_1 = rand(posterior_beta)
-    beta_2 = rand(posterior_beta)
+    # beta_1 = rand(posterior_beta)
+    # beta_2 = rand(posterior_beta)
+    # mirror_coeffs = MirrorStatistic.mirror_statistic(beta_1, beta_2)
 
-    mirror_coeffs = MirrorStatistic.mirror_statistic(beta_1, beta_2)
+    mirror_coeffs = rand(ms_dist_vec)
 
     opt_t = MirrorStatistic.get_t(mirror_coeffs; fdr_q=fdr_target)
     n_selected = sum(mirror_coeffs .> opt_t)
@@ -298,6 +313,7 @@ plt = plot(plt_fdr, plt_n)
 savefig(plt, joinpath(abs_project_path, "results", "simulations", "$(label_files)_fdr_n_hist.pdf"))
 
 mean_selection_matrix = mean(selection_matrix, dims=2)[:, 1]
+scatter(mean_selection_matrix, label=false)
 sort_indeces = sortperm(mean_selection_matrix, rev=true)
 
 sel_vec = zeros(p)

@@ -78,7 +78,7 @@ function random_intercept_model(;
     # Random time component
     params_dict["sigma_beta_time"] = OrderedDict("size" => (1), "from" => num_params+1, "to" => num_params + 1, "bij" => StatsFuns.softplus)
     num_params += 1
-    prior_sigma_beta_time = truncated(Normal(0f0, 1f0), 0f0, Inf32)
+    prior_sigma_beta_time = truncated(Normal(0f0, 5f0), 0f0, Inf32)
     log_prior_sigma_beta_time(sigma_beta_time::Float32) = Distributions.logpdf(prior_sigma_beta_time, sigma_beta_time)
 
     params_dict["beta_time"] = OrderedDict("size" => (n_per_ind), "from" => num_params+1, "to" => num_params + n_per_ind, "bij" => identity)

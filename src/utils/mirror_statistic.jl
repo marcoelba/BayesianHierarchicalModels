@@ -5,6 +5,16 @@ using Turing
 using Random
 
 
+function mean_folded_normal(mu, sigma)
+    sigma * sqrt(2/pi) * exp(-0.5 *(mu/sigma)^2) + mu * (1 - 2*cdf(Normal(), -(mu/sigma)))
+end
+
+
+function var_folded_normal(mu, sigma)
+    mu^2 + sigma^2 - mean_folded_normal(mu, sigma)^2
+end
+
+
 function get_t(mirror_coeffs; fdr_q)
     
     optimal_t = 0
