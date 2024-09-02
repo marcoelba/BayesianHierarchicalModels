@@ -15,11 +15,12 @@ n_individuals = 200
 n_per_ind = 5
 
 p = 1000
-prop_non_zero = 0.05
+prop_non_zero = 0.01
 p1 = Int(p * prop_non_zero)
 p0 = p - p1
 corr_factor = 0.5
 beta_time=Float32.([0, 2, 0, 0, 0])
+beta_pool=Float32.([-1., 1])
 
 n_runs = 2
 num_steps = 2000
@@ -40,7 +41,7 @@ for simu = 1:n_simulations
 
     data_dict = generate_mixed_model_data(;
         n_individuals=n_individuals, n_time_points=n_per_ind,
-        p=p, p1=p1, p0=p0, corr_factor=corr_factor,
+        p=p, p1=p1, p0=p0, corr_factor=corr_factor, beta_pool=beta_pool,
         include_random_int=true, random_int_from_pool=false, random_intercept_sd=0.5,
         include_random_time=true, beta_time=beta_time,
         include_random_slope=false, random_seed=random_seed+simu
@@ -249,8 +250,9 @@ savefig(plt, joinpath(abs_project_path, "results", "simulations", "$(label_files
 # Single Run of Bayesian Model
 
 data_dict = generate_mixed_model_data(;
-    n_individuals=n_individuals, n_time_points=n_per_ind,
-    p=p, p1=p1, p0=p0, corr_factor=corr_factor,
+    n_individuals=n_individuals, n_time_points=n_per_ind, obs_noise_sd=0.5,
+    p=p, p1=p1, p0=p0, corr_factor=corr_factor, beta_pool=beta_pool,
+    beta0_pool=Float32.([-1., -0.5, 0.5, 1.]),
     include_random_int=true, random_int_from_pool=false, random_intercept_sd=0.5,
     include_random_time=true, beta_time=Float32.([0, 2, 0, 0, 0]),
     include_random_slope=false, random_seed=23
@@ -260,13 +262,17 @@ plot(data_dict["y"][1, :])
 plot!(data_dict["y"][2, :])
 plot!(data_dict["y"][3, :])
 plot!(data_dict["y"][4, :])
+density(data_dict["y"][:, 3])
+
 
 posteriors, elbo_trace, params_dict = random_intercept_model(
     data_dict=data_dict,
     num_steps=num_steps,
-    n_runs=n_runs,
+    n_runs=1,
     samples_per_step=4,
-    cauchy_scale=1f0
+    cauchy_scale=1f0,
+    sigma_beta0_random_prior=5f0,
+    sigma_beta0_fixed_prior=0.1f0
 )
 
 plt = plot()
@@ -450,3 +456,51 @@ end
 display(plt)
 savefig(plt, joinpath(abs_project_path, "results", "simulations", "$(label_files)_posterior_beta_time.pdf"))
 
+
+
+# Random Intercept
+posterior_mean = zeros(n_individuals, n_runs)
+posterior_sigma = zeros(n_individuals, n_runs)
+
+for chain = 1:n_runs
+    posterior_mean[:, chain] = posteriors["$(chain)"].μ[params_dict["beta0_random"]["from"]:params_dict["beta0_random"]["to"]]
+    posterior_sigma[:, chain] = sqrt.(posteriors["$(chain)"].Σ.diag[params_dict["beta0_random"]["from"]:params_dict["beta0_random"]["to"]])
+end
+posterior_mean = mean(posterior_mean, dims=2)[:, 1]
+posterior_sigma = mean(posterior_sigma, dims=2)[:, 1]
+
+# Variational distribution is a Gaussian
+posterior_beta_random = MultivariateNormal(
+    posterior_mean,
+    posterior_sigma
+)
+
+beta = rand(posterior_beta_random, MC_SAMPLES)
+
+plt = plot()
+for jj = 1:50
+    density!(beta[jj, :], label=false)
+end
+display(plt)
+savefig(plt, joinpath(abs_project_path, "results", "simulations", "$(label_files)_posterior_beta_time.pdf"))
+
+# sigma_beta0
+posterior_mean = zeros(1, n_runs)
+posterior_sigma = zeros(1, n_runs)
+
+for chain = 1:n_runs
+    posterior_mean[chain] = posteriors["$(chain)"].μ[params_dict["sigma_beta0"]["from"]]
+    posterior_sigma[chain] = sqrt.(posteriors["$(chain)"].Σ.diag[params_dict["sigma_beta0"]["from"]])
+end
+posterior_mean = mean(posterior_mean, dims=2)[:, 1]
+posterior_sigma = mean(posterior_sigma, dims=2)[:, 1]
+
+# Variational distribution is a Gaussian
+posterior_beta_random = MultivariateNormal(
+    posterior_mean,
+    posterior_sigma
+)
+
+theta = params_dict["sigma_beta0"]["bij"].(rand(posterior_beta_random, MC_SAMPLES)')
+
+density(theta, label=false)

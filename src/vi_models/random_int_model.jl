@@ -28,7 +28,9 @@ function random_intercept_model(;
     num_steps=2000,
     n_runs=1,
     samples_per_step=4,
-    cauchy_scale=1f0
+    cauchy_scale=1f0,
+    sigma_beta0_random_prior=1f0,
+    sigma_beta0_fixed_prior=1f0
     )
     # Prior distributions
     params_dict = OrderedDict()
@@ -57,12 +59,12 @@ function random_intercept_model(;
     # Intercept
     params_dict["beta0_fixed"] = OrderedDict("size" => (1), "from" => num_params+1, "to" => num_params + 1, "bij" => identity)
     num_params += 1
-    prior_beta0_fixed = Distributions.Normal(0f0, 5f0)
+    prior_beta0_fixed = Distributions.Normal(0f0, sigma_beta0_fixed_prior)
     log_prior_beta0_fixed(beta0_fixed::Float32) = Distributions.logpdf(prior_beta0_fixed, beta0_fixed)
 
     params_dict["sigma_beta0"] = OrderedDict("size" => (1), "from" => num_params+1, "to" => num_params + 1, "bij" => StatsFuns.softplus)
     num_params += 1
-    prior_sigma_beta0 = truncated(Normal(0f0, 1f0), 0f0, Inf)
+    prior_sigma_beta0 = truncated(Normal(0f0, sigma_beta0_random_prior), 0f0, Inf)
     log_prior_sigma_beta0(sigma_beta0::Float32) = Distributions.logpdf(prior_sigma_beta0, sigma_beta0)
 
     # Random Intercept
