@@ -272,7 +272,7 @@ posteriors, elbo_trace, params_dict = random_intercept_model(
     samples_per_step=4,
     cauchy_scale=1f0,
     sigma_beta0_random_prior=5f0,
-    sigma_beta0_fixed_prior=0.1f0
+    sigma_beta0_fixed_prior=1f0
 )
 
 plt = plot()
@@ -478,19 +478,19 @@ posterior_beta_random = MultivariateNormal(
 beta = rand(posterior_beta_random, MC_SAMPLES)
 
 plt = plot()
-for jj = 1:50
+for jj = 1:n_individuals
     density!(beta[jj, :], label=false)
 end
 display(plt)
 savefig(plt, joinpath(abs_project_path, "results", "simulations", "$(label_files)_posterior_beta_time.pdf"))
 
 # sigma_beta0
-posterior_mean = zeros(1, n_runs)
-posterior_sigma = zeros(1, n_runs)
+posterior_mean = zeros(n_individuals, n_runs)
+posterior_sigma = zeros(n_individuals, n_runs)
 
 for chain = 1:n_runs
-    posterior_mean[chain] = posteriors["$(chain)"].μ[params_dict["sigma_beta0"]["from"]]
-    posterior_sigma[chain] = sqrt.(posteriors["$(chain)"].Σ.diag[params_dict["sigma_beta0"]["from"]])
+    posterior_mean[:, chain] = posteriors["$(chain)"].μ[params_dict["sigma_beta0"]["from"]:params_dict["sigma_beta0"]["to"]]
+    posterior_sigma[:, chain] = sqrt.(posteriors["$(chain)"].Σ.diag[params_dict["sigma_beta0"]["from"]:params_dict["sigma_beta0"]["to"]])
 end
 posterior_mean = mean(posterior_mean, dims=2)[:, 1]
 posterior_sigma = mean(posterior_sigma, dims=2)[:, 1]

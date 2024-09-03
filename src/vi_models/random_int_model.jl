@@ -62,19 +62,34 @@ function random_intercept_model(;
     prior_beta0_fixed = Distributions.Normal(0f0, sigma_beta0_fixed_prior)
     log_prior_beta0_fixed(beta0_fixed::Float32) = Distributions.logpdf(prior_beta0_fixed, beta0_fixed)
 
-    params_dict["sigma_beta0"] = OrderedDict("size" => (1), "from" => num_params+1, "to" => num_params + 1, "bij" => StatsFuns.softplus)
-    num_params += 1
-    prior_sigma_beta0 = truncated(Normal(0f0, sigma_beta0_random_prior), 0f0, Inf)
-    log_prior_sigma_beta0(sigma_beta0::Float32) = Distributions.logpdf(prior_sigma_beta0, sigma_beta0)
-
     # Random Intercept
+
+    # ---------- Standard prior ----------
+    # params_dict["sigma_beta0"] = OrderedDict("size" => (1), "from" => num_params+1, "to" => num_params + 1, "bij" => StatsFuns.softplus)
+    # num_params += 1
+    # prior_sigma_beta0 = truncated(Normal(0f0, sigma_beta0_random_prior), 0f0, Inf)
+    # log_prior_sigma_beta0(sigma_beta0::Float32) = Distributions.logpdf(prior_sigma_beta0, sigma_beta0)
+
+    # params_dict["beta0_random"] = OrderedDict("size" => (n_individuals), "from" => num_params+1, "to" => num_params + n_individuals, "bij" => identity)
+    # num_params += n_individuals
+    # function log_prior_beta0_random(sigma_beta0::Float32, beta0_random::AbstractArray{Float32})
+    #     Distributions.logpdf(
+    #         Turing.filldist(Distributions.Normal(0f0, sigma_beta0), n_individuals),
+    #         beta0_random
+    #     )
+    # end
+
+    # ---------- Horseshoe distribution ----------
+    params_dict["sigma_beta0"] = OrderedDict("size" => (n_individuals), "from" => num_params+1, "to" => num_params + n_individuals, "bij" => StatsFuns.softplus)
+    num_params += n_individuals
+    log_prior_sigma_beta0(sigma_beta0::AbstractArray{Float32}) = sum(Distributions.logpdf.(
+        truncated(Cauchy(0f0, 0.1f0), 0f0, Inf32),
+        sigma_beta0
+    ))
     params_dict["beta0_random"] = OrderedDict("size" => (n_individuals), "from" => num_params+1, "to" => num_params + n_individuals, "bij" => identity)
     num_params += n_individuals
-    function log_prior_beta0_random(sigma_beta0::Float32, beta0_random::AbstractArray{Float32})
-        Distributions.logpdf(
-            Turing.filldist(Distributions.Normal(0f0, sigma_beta0), n_individuals),
-            beta0_random
-        )
+    function log_prior_beta0_random(sigma_beta::AbstractArray{Float32}, beta::AbstractArray{Float32})
+        sum(-0.5f0 * log.(2*Float32(pi)) .- log.(sigma_beta) .- 0.5f0 * (beta ./ sigma_beta).^2f0)
     end
 
     # Random time component
