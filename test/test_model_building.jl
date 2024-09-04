@@ -9,7 +9,8 @@ abs_project_path = normpath(joinpath(@__FILE__, "..", ".."))
 
 include(joinpath(abs_project_path, "src", "model_building", "utils.jl"))
 include(joinpath(abs_project_path, "src", "model_building", "model_prediction_functions.jl"))
-include(joinpath(abs_project_path, "src", "model_building", "log_likelihood_functions.jl"))
+include(joinpath(abs_project_path, "src", "model_building", "distributions_logpdf.jl"))
+include(joinpath(abs_project_path, "src", "model_building", "variational_distributions.jl"))
 
 # Normal model with parameters:
 # beta0
@@ -27,14 +28,14 @@ update_parameters_dict(
     params_dict;
     name="beta0",
     size=1,
-    log_prob_fun=x::Float32 -> DistributionsLogPdf.log_normal(x, sigma=1f0)
+    log_prob_fun=x::Float32 -> DistributionsLogPdf.log_normal(x)
 )
 
 update_parameters_dict(
     params_dict;
     name="beta",
     size=p,
-    log_prob_fun=x::AbstractArray{Float32} -> sum(DistributionsLogPdf.log_normal(x, sigma=Float32.(ones(p))))
+    log_prob_fun=x::AbstractArray{Float32} -> sum(DistributionsLogPdf.log_normal(x))
 )
 
 update_parameters_dict(
@@ -87,8 +88,8 @@ end
 
 log_prior + sum(loglik)
 
-log_joint(;
-    theta=theta,
+log_joint(
+    theta;
     priors_dict=priors_dict,
     theta_axes=theta_axes,
     predictor=Predictors.linear_model,
@@ -96,3 +97,28 @@ log_joint(;
     input=X,
     label=y
 )
+
+partial_log_joint(theta) = log_joint(
+    theta;
+    priors_dict=priors_dict,
+    theta_axes=theta_axes,
+    predictor=Predictors.linear_model,
+    log_likelihood=DistributionsLogPdf.log_normal,
+    input=X,
+    label=y
+)
+partial_log_joint(theta)
+
+z = Float32.(randn(params_dict["tot_params"]*2))
+vi_dist(z) = VariationalDistributions.meanfield(z, tot_params=params_dict["tot_params"])
+vi_dist(z)
+
+res = training_loop(;
+    log_joint=partial_log_joint,
+    vi_dist=vi_dist,
+    z=z,
+    n_iter=10,
+    n_chains=1,
+    samples_per_step=4
+)
+

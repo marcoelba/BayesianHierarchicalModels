@@ -3,7 +3,7 @@ const ϵ = 1e-8
 
 
 """
-    DecayedADAGrad(η=0.1, pre=1.0, post=0.9)
+    MyDecayedADAGrad(η=0.1, pre=1.0, post=0.9)
 
 Implements a decayed version of AdaGrad. It has parameter specific learning rates based on how frequently it is updated.
 
@@ -16,7 +16,7 @@ Implements a decayed version of AdaGrad. It has parameter specific learning rate
 [ADAGrad](http://www.jmlr.org/papers/volume12/duchi11a/duchi11a.pdf) optimiser.
 Parameters don't need tuning.
 """
-mutable struct DecayedADAGrad
+mutable struct MyDecayedADAGrad
     eta::Float64
     pre::Float64
     post::Float64
@@ -24,9 +24,9 @@ mutable struct DecayedADAGrad
     acc::IdDict
 end
 
-DecayedADAGrad(η = 0.1, pre = 1.0, post = 0.9) = DecayedADAGrad(η, pre, post, IdDict())
+MyDecayedADAGrad(η = 0.1, pre = 1.0, post = 0.9) = MyDecayedADAGrad(η, pre, post, IdDict())
 
-function apply!(o::DecayedADAGrad, x, Δ)
+function apply!(o::MyDecayedADAGrad, x, Δ)
     
     η = o.eta
     acc = get!(() -> fill!(similar(x), ϵ), o.acc, x)::typeof(x)
