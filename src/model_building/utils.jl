@@ -13,7 +13,14 @@ abs_project_path = normpath(joinpath(@__FILE__, "..", "..", ".."))
 include(joinpath(abs_project_path, "src", "utils", "decayed_ada_grad.jl"))
 
 
-function update_parameters_dict(params_dict::OrderedDict; name::String, size::Int64, bij=Base.identity, log_prob_fun)
+function update_parameters_dict(
+    params_dict::OrderedDict;
+    name::String,
+    size::Int64,
+    log_prob_fun,
+    bij=Base.identity,
+    dependency=[]
+    )
 
     if !("priors" in keys(params_dict))
         # create sub-dictionary if first call
@@ -29,26 +36,22 @@ function update_parameters_dict(params_dict::OrderedDict; name::String, size::In
     # If first call
     if !("tot_params" in keys(params_dict))
         params_dict["tot_params"] = 0
-        from = 0
-        to = 0
     end
 
     if !(parameter_already_included)
-        from = params_dict["tot_params"] + 1
-        to = params_dict["tot_params"] + size
+        range = (params_dict["tot_params"] + 1):(params_dict["tot_params"] + size)
         params_dict["tot_params"] = params_dict["tot_params"] + size
     else
-        from = params_dict["priors"][name]["from"]
-        to = params_dict["priors"][name]["to"]
+        range = params_dict["priors"][name]["range"]
         params_dict["tot_params"] = params_dict["tot_params"]
     end
 
     new_prior = OrderedDict(
         "size" => (size),
         "bij" => bij,
-        "from" => from,
-        "to" => to,
-        "log_prob" => log_prob_fun
+        "range" => range,
+        "log_prob" => log_prob_fun,
+        "dependency" => dependency
     )
 
     params_dict["priors"][name] = new_prior
@@ -58,15 +61,15 @@ end
 
 
 function log_joint(theta; priors_dict, theta_axes, model, log_likelihood, label)
-    
+
+    # theta_transformed = vcat([priors_dict[prior]["bij"].(theta[priors_dict[prior]["range"]]) for prior in keys(priors_dict)]...)
+    theta_transformed = StatsFuns.softplus.(theta)
+
     # parameters extraction
-    begin
-        theta_components = ComponentArray(theta, theta_axes)
-    end
+    theta_components = ComponentArray(theta_transformed, theta_axes)
 
     predictions = model(
-        theta_components,
-        priors_dict
+        theta_components
     )
 
     loglik = sum(log_likelihood(label, predictions...))
@@ -74,10 +77,11 @@ function log_joint(theta; priors_dict, theta_axes, model, log_likelihood, label)
     # log prior
     log_prior = 0f0
     for prior in keys(priors_dict)
-        println(prior)
-        log_prior += priors_dict[prior]["log_prob"](
-            priors_dict[prior]["bij"].(theta_components[prior])
-        )
+        deps = priors_dict[prior]["dependency"]
+        log_prior += sum(priors_dict[prior]["log_prob"](
+            theta_components[prior],
+            [theta_components[dep] for dep in deps]...
+        ))
     end
 
     loglik + log_prior
@@ -117,17 +121,6 @@ function training_loop(;
         diff_results = DiffResults.GradientResult(z)
 
         while (step ≤ n_iter) && !converged
-
-            # 1. Compute gradient and objective value; results are stored in `diff_results`
-            # partial_log_joint(theta::AbstractArray) = log_joint(
-            #     theta;
-            #     priors_dict=priors_dict,
-            #     theta_axes=theta_axes,
-            #     predictor=Predictors.linear_model,
-            #     log_likelihood=DistributionsLogPdf.log_normal,
-            #     input=X,
-            #     label=y
-            # )
             
             AdvancedVI.grad!(
                 variational_objective,
@@ -163,14 +156,4 @@ function training_loop(;
     
     return Dict("posteriors" => posteriors, "elbo_trace" => elbo_trace)
 
-end
-
-
-function joint_log_prior(;priors_dict, theta_components)
-    for prior in keys(priors_dict)
-        log_prior += priors_dict[prior]["log_prob"](
-            priors_dict[prior]["bij"].(theta_components[prior])
-        )
-
-    end
 end

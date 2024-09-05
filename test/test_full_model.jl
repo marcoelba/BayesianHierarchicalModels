@@ -57,7 +57,8 @@ update_parameters_dict(
     params_dict;
     name="beta0_random",
     size=n_individuals,
-    log_prob_fun=(x::AbstractArray{Float32}, sigma::AbstractArray{Float32}) -> DistributionsLogPdf.log_normal(x, sigma=sigma)
+    log_prob_fun=(x::AbstractArray{Float32}, sigma::AbstractArray{Float32}) -> DistributionsLogPdf.log_normal(x, sigma=sigma),
+    dependency=["sigma_beta0"]
 )
 
 # beta fixed
@@ -75,7 +76,8 @@ update_parameters_dict(
     params_dict;
     name="beta_fixed",
     size=p,
-    log_prob_fun=(x::AbstractArray{Float32}, sigma::AbstractArray{Float32}) -> DistributionsLogPdf.log_normal(x, sigma=sigma)
+    log_prob_fun=(x::AbstractArray{Float32}, sigma::AbstractArray{Float32}) -> DistributionsLogPdf.log_normal(x, sigma=sigma),
+    dependency=["sigma_beta"]
 )
 
 # beta time
@@ -93,7 +95,8 @@ update_parameters_dict(
     params_dict;
     name="beta_time",
     size=n_time_points,
-    log_prob_fun=(x::AbstractArray{Float32}, sigma::AbstractArray{Float32}) -> DistributionsLogPdf.log_normal(x, sigma=sigma)
+    log_prob_fun=(x::AbstractArray{Float32}, sigma::Float32) -> DistributionsLogPdf.log_normal(x, sigma=Float32.(ones(n_time_points)).*sigma),
+    dependency=["sigma_beta_time"]
 )
 
 # sigma y
@@ -121,15 +124,12 @@ begin
 end
 
 # model predictions
-model(theta_components, priors_dict) = Predictors.linear_random_intercept_model(
-    theta_components,
-    priors_dict;
-    Xfix=data_dict["Xfix"],
-    n_time_points=n_time_points
+model(theta_components) = Predictors.linear_random_intercept_model(
+    theta_components;
+    Xfix=data_dict["Xfix"]
 )
 preds = model(
-    theta_components,
-    priors_dict
+    theta_components
 )
 
 # Likelihood

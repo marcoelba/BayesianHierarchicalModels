@@ -13,7 +13,7 @@ include(joinpath(abs_src_path, "utils", "classification_metrics.jl"))
 
 n_individuals = 200
 p = 1000
-prop_non_zero = 0.05
+prop_non_zero = 0.025
 p1 = Int(p * prop_non_zero)
 p0 = p - p1
 corr_factor = 0.5
@@ -239,7 +239,7 @@ data_dict = generate_linear_model_data(
     p=p, p1=p1, p0=p0, corr_factor=corr_factor,
     random_seed=random_seed
 )
-
+n_runs=2
 posteriors, elbo_trace, elbo_trace_batch, params_dict = linear_model(;
     data_dict=data_dict,
     num_steps=num_steps,
@@ -305,10 +305,13 @@ for nn = 1:MC_SAMPLES
     tpr_distribution[nn] = metrics.tpr
 end
 
+
 plt_fdr = histogram(fdr_distribution, label=false, normalize=true)
 xlabel!("FDR", labelfontsize=15)
+vline!([mean(fdr_distribution)], color="red")
 plt_n = histogram(n_selected_distribution, label=false, normalize=true)
 xlabel!("# Included Variables", labelfontsize=15)
+vline!([mean(n_selected_distribution)], color="red")
 plt = plot(plt_fdr, plt_n)
 savefig(plt, joinpath(abs_project_path, "results", "simulations", "$(label_files)_fdr_n_hist.pdf"))
 

@@ -21,9 +21,6 @@ using AdvancedVI
 abs_project_path = normpath(joinpath(@__FILE__, "..", ".."))
 
 include(joinpath(abs_project_path, "utils", "decayed_ada_grad.jl"))
-include(joinpath(abs_project_path, "turing_experiments", "gaussian_spike_slab.jl"))
-include(joinpath(abs_project_path, "mixed_models", "relaxed_bernoulli.jl"))
-
 
 function linear_model(;
     data_dict,
@@ -168,7 +165,7 @@ function linear_model(;
         variational_objective = Turing.Variational.ELBO()
 
         # Optimizer
-        optimizer = DecayedADAGrad()
+        optimizer = MyDecayedADAGrad()
 
         # VI algorithm
         alg = AdvancedVI.ADVI(samples_per_step, num_steps, adtype=ADTypes.AutoZygote())
