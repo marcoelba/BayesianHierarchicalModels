@@ -36,6 +36,8 @@ function update_parameters_dict(
     # If first call
     if !("tot_params" in keys(params_dict))
         params_dict["tot_params"] = 0
+        params_dict["ranges"] = []
+        params_dict["bijectors"] = []    
     end
 
     if !(parameter_already_included)
@@ -56,14 +58,37 @@ function update_parameters_dict(
 
     params_dict["priors"][name] = new_prior
 
+    # Create a tuple for the ranges and the transformations
+    push!(params_dict["ranges"], params_dict["priors"][name]["range"])
+    push!(params_dict["bijectors"], params_dict["priors"][name]["bij"])
+    
     return params_dict
 end
 
+function get_parameters_axes(params_dict)
+    
+        # Get params axes
+        theta_components = tuple(Symbol.(params_dict["priors"].keys)...)
+        proto_array = ComponentArray(;
+            [Symbol(pp) => ifelse(params_dict["priors"][pp]["size"] > 1, ones(params_dict["priors"][pp]["size"]), ones(params_dict["priors"][pp]["size"])[1])  for pp in params_dict["priors"].keys]...
+        )
+        theta_axes = getaxes(proto_array)
+        theta = Float32.(randn(params_dict["tot_params"]))
+        begin
+            theta_components = ComponentArray(theta, theta_axes)
+        end
 
-function log_joint(theta; priors_dict, theta_axes, model, log_likelihood, label)
+        return theta_axes, theta_components
+end
 
-    # theta_transformed = vcat([priors_dict[prior]["bij"].(theta[priors_dict[prior]["range"]]) for prior in keys(priors_dict)]...)
-    theta_transformed = StatsFuns.softplus.(theta)
+
+function log_joint(theta; params_dict, theta_axes, model, log_likelihood, label)
+
+    priors = params_dict["priors"]
+    bijectors = params_dict["bijectors"]
+    ranges = params_dict["ranges"]
+
+    theta_transformed = vcat([bijectors[pp].(theta[ranges[pp]]) for pp in eachindex(bijectors)]...)
 
     # parameters extraction
     theta_components = ComponentArray(theta_transformed, theta_axes)
@@ -76,9 +101,9 @@ function log_joint(theta; priors_dict, theta_axes, model, log_likelihood, label)
 
     # log prior
     log_prior = 0f0
-    for prior in keys(priors_dict)
-        deps = priors_dict[prior]["dependency"]
-        log_prior += sum(priors_dict[prior]["log_prob"](
+    for prior in keys(priors)
+        deps = priors[prior]["dependency"]
+        log_prior += sum(priors[prior]["log_prob"](
             theta_components[prior],
             [theta_components[dep] for dep in deps]...
         ))

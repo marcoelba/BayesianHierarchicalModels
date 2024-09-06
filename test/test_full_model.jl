@@ -2,10 +2,12 @@
 using OrderedCollections
 using Distributions
 using ComponentArrays, UnPack
+using StatsPlots
 
 abs_project_path = normpath(joinpath(@__FILE__, "..", ".."))
 
 include(joinpath(abs_project_path, "src", "model_building", "utils.jl"))
+include(joinpath(abs_project_path, "src", "model_building", "posterior_utils.jl"))
 include(joinpath(abs_project_path, "src", "model_building", "model_prediction_functions.jl"))
 include(joinpath(abs_project_path, "src", "model_building", "distributions_logpdf.jl"))
 include(joinpath(abs_project_path, "src", "model_building", "variational_distributions.jl"))
@@ -111,36 +113,18 @@ update_parameters_dict(
     )
 )
 
-# parameters extraction
-priors_dict = params_dict["priors"]
-theta_components = tuple(Symbol.(priors_dict.keys)...)
-proto_array = ComponentArray(;
-    [Symbol(pp) => ifelse(priors_dict[pp]["size"] > 1, ones(priors_dict[pp]["size"]), ones(priors_dict[pp]["size"])[1])  for pp in priors_dict.keys]...
-)
-theta_axes = getaxes(proto_array)
-theta = Float32.(randn(params_dict["tot_params"]))
-begin
-    theta_components = ComponentArray(theta, theta_axes)
-end
+theta_axes, _ = get_parameters_axes(params_dict)
 
 # model predictions
 model(theta_components) = Predictors.linear_random_intercept_model(
     theta_components;
     Xfix=data_dict["Xfix"]
 )
-preds = model(
-    theta_components
-)
-
-# Likelihood
-sum(DistributionsLogPdf.log_normal(data_dict["y"], preds[1], preds[2]))
-sum(DistributionsLogPdf.log_normal(data_dict["y"], preds...))
-
 
 # model
 partial_log_joint(theta) = log_joint(
     theta;
-    priors_dict=priors_dict,
+    params_dict=params_dict,
     theta_axes=theta_axes,
     model=model,
     log_likelihood=DistributionsLogPdf.log_normal,
@@ -158,6 +142,25 @@ res = training_loop(;
     vi_dist=vi_dist,
     z=z_init,
     n_iter=num_iter,
-    n_chains=1,
+    n_chains=n_chains,
     samples_per_step=4
 )
+
+vi_posterior = average_posterior(
+    res["posteriors"],
+    Distributions.MultivariateNormal
+)
+
+samples_posterior = posterior_samples(
+    vi_posterior=vi_posterior,
+    params_dict=params_dict,
+    n_samples=1000
+)
+beta_samples = extract_parameter(
+    prior="beta_fixed",
+    params_dict=params_dict,
+    samples_posterior=samples_posterior
+)
+
+plt = density(beta_samples', label=false)
+
