@@ -27,7 +27,7 @@ p1 = 100
 p = p0 + p1
 true_coef = vcat(zeros(p0), ones(p1))
 
-mc_samples = 1000
+mc_samples = 100
 fdr_target = 0.1
 fp = 0
 fn = 0
@@ -59,131 +59,9 @@ display(plt)
 # non-null
 plt = plot()
 for pp = p0+1:p
-    plt = density!(rand(Normal(weighted_posterior_mean[pp], posterior_std[pp]), mc_samples), label=false)
+    plt = density!(rand(Normal(posterior_mean[pp], posterior_std[pp]), mc_samples), label=false)
 end
 display(plt)
-
-# mix
-plt = density(
-    rand(Normal(weighted_posterior_mean[p0], posterior_std[p0]), mc_samples),
-    label="Null", color="gray"
-)
-plt = density!(
-    rand(Normal(weighted_posterior_mean[p], posterior_std[p]), mc_samples),
-    label="Active", color="red", labelfontsize=20
-)
-for pp in range(p0-10, p0-1)
-    plt = density!(
-        rand(Normal(weighted_posterior_mean[pp], posterior_std[pp]), mc_samples),
-        label=false, color="gray"
-    )
-end
-for pp in range(p0+1, p0+10)
-    plt = density!(
-        rand(Normal(weighted_posterior_mean[pp], posterior_std[pp]), mc_samples),
-        label=false, color="red"
-    )
-end
-display(plt)
-title!("Posterior Distributions", titlefontsize=15)
-savefig(plt, joinpath(abs_project_path, "results", "ms_analysis", "$(label_files)_posterior_dists.pdf"))
-
-
-output = zeros(mc_samples)
-fdr = []
-tpr = []
-selection_matrix = zeros(p, mc_samples)
-optimal_t = []
-mirror_coefficients = zeros(p, mc_samples)
-
-
-for nn = 1:mc_samples
-    beta_1 = rand(posterior)
-    beta_2 = rand(posterior)
-
-    mirror_coeffs = MirrorStatistic.mirror_statistic(beta_1, beta_2)
-    mirror_coefficients[:, nn] = mirror_coeffs
-
-    opt_t = MirrorStatistic.get_t(mirror_coeffs; fdr_q=fdr_target)
-    push!(optimal_t, opt_t)
-    output[nn] = sum(mirror_coeffs .> opt_t)
-    selection_matrix[:, nn] = (mirror_coeffs .> opt_t) * 1
-
-    metrics = classification_metrics.wrapper_metrics(
-        true_coef .> 0.,
-        mirror_coeffs .> opt_t
-    )
-    push!(fdr, metrics.fdr)
-    push!(tpr, metrics.tpr)
-
-end
-
-mean(output)
-mean(fdr)
-mode(fdr)
-
-plt_n = histogram(output, label="# inc. covs")
-vline!([mean(output)], color="red", label="Mean #", linewidth=5)
-plt_fdr = histogram(fdr, label="FDR")
-vline!([mean(fdr)], color="red", label="Mean FDR", linewidth=5)
-
-plt = plot(plt_fdr, plt_n)
-savefig(plt, joinpath(abs_project_path, "results", "ms_analysis", "$(label_files)_bayesian_fdr_n.pdf"))
-
-
-mean_selection_matrix = mean(selection_matrix, dims=2)[:, 1]
-plt = scatter(mean_selection_matrix, label=false)
-xlabel!("Regression Coefficients", labelfontsize=15)
-ylabel!("Inclusion Probability", labelfontsize=15)
-savefig(plt, joinpath(abs_project_path, "results", "ms_analysis", "$(label_files)_mean_selection_matrix.pdf"))
-
-classification_metrics.wrapper_metrics(
-    true_coef .> 0.,
-    mean_selection_matrix .> 0.5
-)
-
-sort_indeces = sortperm(mean_selection_matrix, rev=true)
-
-selection = mean_selection_matrix .> 0.5
-extra = Int(round(sum(selection) * (0.1 / 0.9)))
-selection[
-    sort_indeces[sum(selection) + 1:sum(selection) + extra]
-] .= 1
-classification_metrics.wrapper_metrics(
-    true_coef .!= 0.,
-    selection .> 0
-)
-
-sel_vec = zeros(p)
-sel_vec[sort_indeces[1:Int(mode(output))]] .= 1.
-classification_metrics.wrapper_metrics(
-    true_coef .> 0.,
-    sel_vec .> 0.
-)
-
-sel_vec = zeros(p)
-sel_vec[sort_indeces[1:Int(round(mean(output)))]] .= 1.
-classification_metrics.wrapper_metrics(
-    true_coef .> 0.,
-    sel_vec .> 0.
-)
-
-
-range_included = Int.(sort(unique(output)))
-fdr_vec = []
-tpr_vec = []
-
-for (ii, jj) in enumerate(range_included)
-    sel_vec = zeros(p)
-    sel_vec[sort_indeces[1:jj]] .= 1.
-    met = classification_metrics.wrapper_metrics(
-        true_coef .> 0.,
-        sel_vec .> 0.
-    )
-    push!(fdr_vec, met.fdr)
-    push!(tpr_vec, met.tpr)
-end
-scatter(range_included, fdr_vec)
 
 
 # MS Distribution
@@ -195,7 +73,6 @@ var_vec = var_folded_normal.(posterior_mean, posterior_std) .+
 ms_dist_vec = arraydist([
     Normal(mean_ms, sqrt(var_ms)) for (mean_ms, var_ms) in zip(mean_vec, var_vec)
 ])
-
 
 output = zeros(mc_samples)
 fdr = []
@@ -226,6 +103,24 @@ end
 mean(output)
 mean(fdr)
 mode(fdr)
+
+histogram(optimal_t)
+mean(optimal_t)
+density(mirror_coefficients', label=false)
+
+# using all samples together
+full_ms = vcat(mirror_coefficients...)
+density(full_ms)
+opt_t = MirrorStatistic.get_t(full_ms; fdr_q=fdr_target)
+vline!([-opt_t, opt_t])
+sum(full_ms .> opt_t) / (p*mc_samples)
+
+
+x = Normal(0., 0.1)
+density(rand(x, 1000))
+quantile(x, 0.05)
+cdf(x, [-0.21, 0, -0.1])
+
 
 plt_n = histogram(output, label="# inc. covs")
 vline!([mean(output)], color="red", label="Mean #", linewidth=5)

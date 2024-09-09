@@ -117,7 +117,7 @@ end
 function training_loop(;
     log_joint,
     vi_dist,
-    z,
+    z_dim::Int64,
     n_iter::Int64,
     n_chains::Int64=1,
     samples_per_step::Int64=4
@@ -143,6 +143,7 @@ function training_loop(;
         step = 1
 
         prog = ProgressMeter.Progress(n_iter, 1)
+        z = Float32.(randn(z_dim)) * 0.5f0
         diff_results = DiffResults.GradientResult(z)
 
         while (step ≤ n_iter) && !converged

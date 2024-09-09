@@ -1,12 +1,12 @@
 # Test on linear model
 using OrderedCollections
 using Distributions
-using ComponentArrays, UnPack
 using StatsPlots
 
 abs_project_path = normpath(joinpath(@__FILE__, "..", ".."))
 
 include(joinpath(abs_project_path, "src", "model_building", "utils.jl"))
+include(joinpath(abs_project_path, "src", "model_building", "plot_utils.jl"))
 include(joinpath(abs_project_path, "src", "model_building", "posterior_utils.jl"))
 include(joinpath(abs_project_path, "src", "model_building", "model_prediction_functions.jl"))
 include(joinpath(abs_project_path, "src", "model_building", "distributions_logpdf.jl"))
@@ -15,11 +15,11 @@ include(joinpath(abs_project_path, "src", "model_building", "mirror_statistic.jl
 include(joinpath(abs_project_path, "src", "utils", "mixed_models_data_generation.jl"))
 
 
-n_individuals = 200
+n_individuals = 50
 n_time_points = 5
 
-p = 10
-prop_non_zero = 0.5
+p = 100
+prop_non_zero = 0.1
 p1 = Int(p * prop_non_zero)
 p0 = p - p1
 corr_factor = 0.5
@@ -68,13 +68,24 @@ update_parameters_dict(
 # beta fixed
 update_parameters_dict(
     params_dict;
-    name="sigma_beta",
+    name="tau_sigma",
     size=p,
     bij=StatsFuns.softplus,
     log_prob_fun=x::AbstractArray{Float32} -> sum(Distributions.logpdf.(
         truncated(Cauchy(0f0, 1f0), 0f0, Inf32),
         x
     ))
+)
+update_parameters_dict(
+    params_dict;
+    name="sigma_beta",
+    size=p,
+    bij=StatsFuns.softplus,
+    log_prob_fun=(x::AbstractArray{Float32}, sigma::AbstractArray{Float32}) -> sum(Distributions.logpdf.(
+        truncated(Cauchy(0f0, sigma), 0f0, Inf32),
+        x
+    )),
+    dependency=["tau_sigma"]
 )
 update_parameters_dict(
     params_dict;
@@ -136,19 +147,18 @@ partial_log_joint(Float32.(randn(params_dict["tot_params"])))
 
 # VI distribution
 vi_dist(z::AbstractArray) = VariationalDistributions.meanfield(z, tot_params=params_dict["tot_params"])
-z_init = Float32.(randn(params_dict["tot_params"]*2))
 
 # Training
 res = training_loop(;
     log_joint=partial_log_joint,
     vi_dist=vi_dist,
-    z=z_init,
+    z_dim=params_dict["tot_params"]*2,
     n_iter=num_iter,
     n_chains=n_chains,
     samples_per_step=4
 )
 
-plot(res["elbo_trace"][200:end, :])
+plot(res["elbo_trace"][100:end, :])
 
 vi_posterior = average_posterior(
     res["posteriors"],
@@ -183,11 +193,9 @@ class_distributions = MirrorStatistic.fdr_distribution(
     fdr_target=0.1
 )
 
-plt_fdr = histogram(class_distributions.fdr_distribution, label=false, normalize=true)
-xlabel!("FDR", labelfontsize=15)
-vline!([mean(class_distributions.fdr_distribution)], color="red", label="Mean", linewidth=2)
-plt_n = histogram(class_distributions.n_selected_distribution, label=false, normalize=true)
-xlabel!("# Included Variables", labelfontsize=15)
-vline!([mean(class_distributions.n_selected_distribution)], color="red", label="Mean", linewidth=2)
-plt = plot(plt_fdr, plt_n)
+plt = fdr_n_hist(class_distributions)
+display(plt)
 savefig(plt, joinpath(abs_project_path, "results", "simulations", "$(label_files)_fdr_n_hist.pdf"))
+
+plt = scatter_sel_matrix(class_distributions, p0=p0)
+display(plt)
