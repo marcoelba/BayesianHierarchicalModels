@@ -11,6 +11,7 @@ include(joinpath(abs_project_path, "src", "model_building", "posterior_utils.jl"
 include(joinpath(abs_project_path, "src", "model_building", "model_prediction_functions.jl"))
 include(joinpath(abs_project_path, "src", "model_building", "distributions_logpdf.jl"))
 include(joinpath(abs_project_path, "src", "model_building", "variational_distributions.jl"))
+include(joinpath(abs_project_path, "src", "model_building", "mirror_statistic.jl"))
 include(joinpath(abs_project_path, "src", "utils", "mixed_models_data_generation.jl"))
 
 
@@ -35,6 +36,7 @@ data_dict = generate_mixed_model_data(;
 
 n_chains = 2
 num_iter = 2000
+MC_SAMPLES=2000
 
 params_dict = OrderedDict()
 
@@ -146,6 +148,8 @@ res = training_loop(;
     samples_per_step=4
 )
 
+plot(res["elbo_trace"][200:end, :])
+
 vi_posterior = average_posterior(
     res["posteriors"],
     Distributions.MultivariateNormal
@@ -154,7 +158,7 @@ vi_posterior = average_posterior(
 samples_posterior = posterior_samples(
     vi_posterior=vi_posterior,
     params_dict=params_dict,
-    n_samples=1000
+    n_samples=MC_SAMPLES
 )
 beta_samples = extract_parameter(
     prior="beta_fixed",
@@ -164,3 +168,26 @@ beta_samples = extract_parameter(
 
 plt = density(beta_samples', label=false)
 
+# Mirror Statistic
+ms_dist = MirrorStatistic.posterior_ms_coefficients(
+    vi_posterior=vi_posterior,
+    prior="beta_fixed",
+    params_dict=params_dict
+)
+plt = density(rand(ms_dist, MC_SAMPLES)', label=false)
+
+class_distributions = MirrorStatistic.fdr_distribution(
+    ms_dist_vec=ms_dist,
+    mc_samples=MC_SAMPLES,
+    beta_true=data_dict["beta_fixed"],
+    fdr_target=0.1
+)
+
+plt_fdr = histogram(class_distributions.fdr_distribution, label=false, normalize=true)
+xlabel!("FDR", labelfontsize=15)
+vline!([mean(class_distributions.fdr_distribution)], color="red", label="Mean", linewidth=2)
+plt_n = histogram(class_distributions.n_selected_distribution, label=false, normalize=true)
+xlabel!("# Included Variables", labelfontsize=15)
+vline!([mean(class_distributions.n_selected_distribution)], color="red", label="Mean", linewidth=2)
+plt = plot(plt_fdr, plt_n)
+savefig(plt, joinpath(abs_project_path, "results", "simulations", "$(label_files)_fdr_n_hist.pdf"))
