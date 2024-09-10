@@ -27,20 +27,19 @@ p1 = 100
 p = p0 + p1
 true_coef = vcat(zeros(p0), ones(p1))
 
-mc_samples = 100
 fdr_target = 0.1
 fp = 0
 fn = 0
 
 Random.seed!(35)
 
-posterior_mean_null = vcat(randn(p0 - fp) * 0.05, rand([-0.1, 0.1], fp))
+posterior_mean_null = vcat(randn(p0 - fp) * 0.0, rand([-0.1, 0.1], fp))
 posterior_mean_active = vcat(randn(p1 - fn) * 0.05 .+ 1., randn(fn) * 0.01)
 
 posterior_mean = vcat(posterior_mean_null, posterior_mean_active)
 
 posterior_std_null = abs.(randn(p0) * 0.01) .+ 0.1
-posterior_std_active = abs.(randn(p1) * 0.2) .+ 0.1
+posterior_std_active = abs.(randn(p1) * 0.05) .+ 0.1
 posterior_std = vcat(posterior_std_null, posterior_std_active)
 
 scatter(posterior_mean)
@@ -48,6 +47,9 @@ scatter(posterior_mean)
 posterior = arraydist([
     Normal(mu, sd) for (mu, sd) in zip(posterior_mean, posterior_std)
 ])
+
+mc_samples = 2000
+
 
 # null posteriors
 plt = plot()
@@ -74,6 +76,64 @@ ms_dist_vec = arraydist([
     Normal(mean_ms, sqrt(var_ms)) for (mean_ms, var_ms) in zip(mean_vec, var_vec)
 ])
 
+scatter(mean_vec)
+scatter(rand(ms_dist_vec))
+
+# no MC loop
+mirror_coefficients = rand(ms_dist_vec, mc_samples)
+opt_t = 0
+t = 0
+for t in range(0., maximum(mirror_coefficients), length=2000)
+    n_left_tail = sum(mirror_coefficients .< -t, dims=1)
+    n_right_tail = sum(mirror_coefficients .> t, dims=1)
+    n_right_tail = ifelse(n_right_tail .> 0, n_right_tail, 1)
+
+    fdp = n_left_tail ./ n_right_tail
+
+    if fdp .<= fdr_target
+        opt_t = t
+        break
+    end
+end
+
+inclusion_matrix = mirror_coefficients .> opt_t
+n_inclusion_per_mc = sum(inclusion_matrix, dims=1)[1,:]
+histogram(n_inclusion_per_mc)
+average_inclusion_number = Int(round(mean(n_inclusion_per_mc)))
+sum(mirror_coefficients .> opt_t, dims=2)[:,1]
+sort_indices = sortperm(sum(mirror_coefficients .> opt_t, dims=2)[:,1], rev=true)
+
+selection = zeros(p)
+selection[sort_indices[1:average_inclusion_number]] .= 1
+metrics = classification_metrics.wrapper_metrics(
+    true_coef .> 0.,
+    selection .> 0
+)
+
+fdr = []
+for n in range(minimum(n_inclusion_per_mc), maximum(n_inclusion_per_mc))
+    selection = zeros(p)
+    selection[sort_indices[1:n]] .= 1
+    metrics = classification_metrics.wrapper_metrics(
+        true_coef .> 0.,
+        selection .> 0
+    )
+    push!(fdr, metrics.fdr)
+end
+boxplot(fdr)
+
+fdr = []
+for mc in eachcol(inclusion_matrix)
+    metrics = classification_metrics.wrapper_metrics(
+        true_coef .> 0.,
+        mc .> 0
+    )
+    push!(fdr, metrics.fdr)
+end
+boxplot(fdr)
+
+
+# MC loop
 output = zeros(mc_samples)
 fdr = []
 tpr = []
@@ -84,9 +144,8 @@ mirror_coefficients = zeros(p, mc_samples)
 for nn = 1:mc_samples
 
     mirror_coeffs = rand(ms_dist_vec)
-    mirror_coefficients[:, nn] = mirror_coeffs
-
     opt_t = MirrorStatistic.get_t(mirror_coeffs; fdr_q=fdr_target)
+    mirror_coefficients[:, nn] = mirror_coeffs
     push!(optimal_t, opt_t)
     output[nn] = sum(mirror_coeffs .> opt_t)
     selection_matrix[:, nn] = (mirror_coeffs .> opt_t) * 1
@@ -105,22 +164,6 @@ mean(fdr)
 mode(fdr)
 
 histogram(optimal_t)
-mean(optimal_t)
-density(mirror_coefficients', label=false)
-
-# using all samples together
-full_ms = vcat(mirror_coefficients...)
-density(full_ms)
-opt_t = MirrorStatistic.get_t(full_ms; fdr_q=fdr_target)
-vline!([-opt_t, opt_t])
-sum(full_ms .> opt_t) / (p*mc_samples)
-
-
-x = Normal(0., 0.1)
-density(rand(x, 1000))
-quantile(x, 0.05)
-cdf(x, [-0.21, 0, -0.1])
-
 
 plt_n = histogram(output, label="# inc. covs")
 vline!([mean(output)], color="red", label="Mean #", linewidth=5)
@@ -164,6 +207,27 @@ classification_metrics.wrapper_metrics(
 
 sel_vec = zeros(p)
 sel_vec[sort_indeces[1:Int(round(mean(output)))]] .= 1.
+classification_metrics.wrapper_metrics(
+    true_coef .> 0.,
+    sel_vec .> 0.
+)
+
+sel_vec = zeros(p)
+sel_vec[sort_indeces[1:Int(round(median(output)))]] .= 1.
+classification_metrics.wrapper_metrics(
+    true_coef .> 0.,
+    sel_vec .> 0.
+)
+
+sel_vec = zeros(p)
+sel_vec[sort_indeces[1:Int(round(minimum(output)))]] .= 1.
+classification_metrics.wrapper_metrics(
+    true_coef .> 0.,
+    sel_vec .> 0.
+)
+
+sel_vec = zeros(p)
+sel_vec[sort_indeces[1:Int(round(maximum(output)))]] .= 1.
 classification_metrics.wrapper_metrics(
     true_coef .> 0.,
     sel_vec .> 0.

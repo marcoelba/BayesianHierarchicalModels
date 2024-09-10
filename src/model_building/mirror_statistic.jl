@@ -41,7 +41,7 @@ function get_t(mirror_coeffs; fdr_target)
     optimal_t = 0
     t = 0
     
-    for t in sort(abs.(mirror_coeffs))
+    for t in range(0., maximum(mirror_coeffs), length=2000)
         n_left_tail = sum(mirror_coeffs .< -t)
         n_right_tail = sum(mirror_coeffs .> t)
         n_right_tail = ifelse(n_right_tail .> 0, n_right_tail, 1)
@@ -94,6 +94,52 @@ function fdr_distribution(;ms_dist_vec, mc_samples::Int64, beta_true, fdr_target
         selection_matrix=selection_matrix
     )
 end
+
+
+function optimal_inclusion(;ms_dist_vec, mc_samples::Int64, beta_true, fdr_target::Real=0.1)
+
+    mirror_coefficients = rand(ms_dist_vec, mc_samples)
+    opt_t = get_t(mirror_coefficients; fdr_target=fdr_target)
+
+    inclusion_matrix = mirror_coefficients .> opt_t
+    n_inclusion_per_mc = sum(inclusion_matrix, dims=1)[1,:]
+    sort_indices = sortperm(sum(mirror_coefficients .> opt_t, dims=2)[:,1], rev=true)
+
+    fdr = []
+    tpr = []
+    for n in range(minimum(n_inclusion_per_mc), maximum(n_inclusion_per_mc))
+        selection = zeros(p)
+        selection[sort_indices[1:n]] .= 1
+        metrics = classification_metrics.wrapper_metrics(
+            beta_true .!= 0.,
+            selection .> 0
+        )
+        push!(fdr, metrics.fdr)
+        push!(tpr, metrics.tpr)
+
+    end
+
+    selection = zeros(p)
+    selection[sort_indices[1:Int(round(mean(n_inclusion_per_mc)))]] .= 1
+    metrics_mean = classification_metrics.wrapper_metrics(
+        beta_true .!= 0.,
+        selection .> 0
+    )
+    selection = zeros(p)
+    selection[sort_indices[1:Int(round(median(n_inclusion_per_mc)))]] .= 1
+    metrics_median = classification_metrics.wrapper_metrics(
+        beta_true .!= 0.,
+        selection .> 0
+    )
+
+    return (
+        fdr_distribution=fdr,
+        tpr_distribution=tpr,
+        metrics_mean=metrics_mean,
+        metrics_median=metrics_median
+    )
+end
+
 
 """
 false_discovery_rate(;
