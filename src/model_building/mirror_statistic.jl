@@ -98,6 +98,7 @@ end
 
 function optimal_inclusion(;ms_dist_vec, mc_samples::Int64, beta_true, fdr_target::Real=0.1)
 
+    p = length(beta_true)
     mirror_coefficients = rand(ms_dist_vec, mc_samples)
     opt_t = get_t(mirror_coefficients; fdr_target=fdr_target)
 
@@ -110,7 +111,7 @@ function optimal_inclusion(;ms_dist_vec, mc_samples::Int64, beta_true, fdr_targe
     for n in range(minimum(n_inclusion_per_mc), maximum(n_inclusion_per_mc))
         selection = zeros(p)
         selection[sort_indices[1:n]] .= 1
-        metrics = classification_metrics.wrapper_metrics(
+        metrics = wrapper_metrics(
             beta_true .!= 0.,
             selection .> 0
         )
@@ -121,13 +122,13 @@ function optimal_inclusion(;ms_dist_vec, mc_samples::Int64, beta_true, fdr_targe
 
     selection = zeros(p)
     selection[sort_indices[1:Int(round(mean(n_inclusion_per_mc)))]] .= 1
-    metrics_mean = classification_metrics.wrapper_metrics(
+    metrics_mean = wrapper_metrics(
         beta_true .!= 0.,
         selection .> 0
     )
     selection = zeros(p)
     selection[sort_indices[1:Int(round(median(n_inclusion_per_mc)))]] .= 1
-    metrics_median = classification_metrics.wrapper_metrics(
+    metrics_median = wrapper_metrics(
         beta_true .!= 0.,
         selection .> 0
     )
@@ -136,7 +137,9 @@ function optimal_inclusion(;ms_dist_vec, mc_samples::Int64, beta_true, fdr_targe
         fdr_distribution=fdr,
         tpr_distribution=tpr,
         metrics_mean=metrics_mean,
-        metrics_median=metrics_median
+        metrics_median=metrics_median,
+        inclusion_matrix=inclusion_matrix,
+        opt_t=opt_t
     )
 end
 

@@ -25,7 +25,8 @@ include(joinpath(abs_project_path, "utils", "decayed_ada_grad.jl"))
 function linear_model(;
     data_dict,
     num_steps=2000,
-    n_runs=1
+    n_runs=1,
+    tau_beta=1f0
     )
     # Prior distributions
     params_dict = OrderedDict()
@@ -42,7 +43,7 @@ function linear_model(;
     params_dict["sigma_beta"] = OrderedDict("size" => (p), "from" => num_params+1, "to" => num_params + p, "bij" => StatsFuns.softplus)
     num_params += p
     log_prior_sigma_beta(sigma_beta::AbstractArray{Float32}) = sum(Distributions.logpdf.(
-        truncated(Cauchy(0f0, 1f0), 0f0, Inf32),
+        truncated(Cauchy(0f0, tau_beta), 0f0, Inf32),
         sigma_beta
     ))
     

@@ -59,8 +59,10 @@ function update_parameters_dict(
     params_dict["priors"][name] = new_prior
 
     # Create a tuple for the ranges and the transformations
-    push!(params_dict["ranges"], params_dict["priors"][name]["range"])
-    push!(params_dict["bijectors"], params_dict["priors"][name]["bij"])
+    if !(parameter_already_included)
+        push!(params_dict["ranges"], params_dict["priors"][name]["range"])
+        push!(params_dict["bijectors"], params_dict["priors"][name]["bij"])
+    end
     
     return params_dict
 end

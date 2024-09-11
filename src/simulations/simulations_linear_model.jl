@@ -6,7 +6,7 @@ abs_src_path = normpath(joinpath(@__FILE__, "..", ".."))
 
 include(joinpath(abs_src_path, "vi_models", "linear_model.jl"))
 include(joinpath(abs_src_path, "utils", "mixed_models_data_generation.jl"))
-include(joinpath(abs_src_path, "utils", "mirror_statistic.jl"))
+include(joinpath(abs_src_path, "model_building", "mirror_statistic.jl"))
 include(joinpath(abs_src_path, "utils", "plot_functions.jl"))
 include(joinpath(abs_src_path, "utils", "classification_metrics.jl"))
 
@@ -243,7 +243,8 @@ n_runs=2
 posteriors, elbo_trace, elbo_trace_batch, params_dict = linear_model(;
     data_dict=data_dict,
     num_steps=num_steps,
-    n_runs=n_runs
+    n_runs=n_runs,
+    tau_beta=0.1f0
 )
 
 # ------ Mirror Statistic ------
@@ -279,65 +280,48 @@ ms_dist_vec = arraydist([
     Normal(mean_ms, sqrt(var_ms)) for (mean_ms, var_ms) in zip(mean_vec, var_vec)
 ])
 
-fdr_distribution = zeros(MC_SAMPLES)
-tpr_distribution = zeros(MC_SAMPLES)
-n_selected_distribution = zeros(MC_SAMPLES)
-selection_matrix = zeros(p, MC_SAMPLES)
 
-for nn = 1:MC_SAMPLES
-    # beta_1 = rand(posterior_beta)
-    # beta_2 = rand(posterior_beta)
-    # mirror_coeffs = MirrorStatistic.mirror_statistic(beta_1, beta_2)
+metrics_old = MirrorStatistic.fdr_distribution(
+    ms_dist_vec=ms_dist_vec,
+    mc_samples=MC_SAMPLES,
+    beta_true=data_dict["beta"],
+    fdr_target=0.1
+)
 
-    mirror_coeffs = rand(ms_dist_vec)
-
-    opt_t = MirrorStatistic.get_t(mirror_coeffs; fdr_q=fdr_target)
-    n_selected = sum(mirror_coeffs .> opt_t)
-    n_selected_distribution[nn] = n_selected
-    selection_matrix[:, nn] = (mirror_coeffs .> opt_t) * 1
-
-    metrics = classification_metrics.wrapper_metrics(
-        data_dict["beta"] .!= 0.,
-        mirror_coeffs .> opt_t
-    )
-    
-    fdr_distribution[nn] = metrics.fdr
-    tpr_distribution[nn] = metrics.tpr
-end
-
-
-plt_fdr = histogram(fdr_distribution, label=false, normalize=true)
+plt_fdr = histogram(metrics_old.fdr_distribution, label=false, normalize=true)
 xlabel!("FDR", labelfontsize=15)
-vline!([mean(fdr_distribution)], color="red")
-plt_n = histogram(n_selected_distribution, label=false, normalize=true)
+vline!([mean(metrics_old.fdr_distribution)], color="red")
+plt_n = histogram(metrics_old.n_selected_distribution, label=false, normalize=true)
 xlabel!("# Included Variables", labelfontsize=15)
-vline!([mean(n_selected_distribution)], color="red")
+vline!([mean(metrics_old.n_selected_distribution)], color="red")
 plt = plot(plt_fdr, plt_n)
 savefig(plt, joinpath(abs_project_path, "results", "simulations", "$(label_files)_fdr_n_hist.pdf"))
 
-mean_selection_matrix = mean(selection_matrix, dims=2)[:, 1]
+boxplot(metrics_old.fdr_distribution)
+
+mean_selection_matrix = mean(metrics_old.selection_matrix, dims=2)[:, 1]
 scatter(mean_selection_matrix, label=false)
 sort_indeces = sortperm(mean_selection_matrix, rev=true)
 
 sel_vec = zeros(p)
-sel_vec[sort_indeces[1:Int(mode(n_selected_distribution))]] .= 1.
+sel_vec[sort_indeces[1:Int(mode(metrics_old.n_selected_distribution))]] .= 1.
 classification_metrics.wrapper_metrics(
     data_dict["beta"] .!= 0.,
     sel_vec .> 0.
 )
 
 sel_vec = zeros(p)
-sel_vec[sort_indeces[1:Int(round(mean(n_selected_distribution)))]] .= 1.
+sel_vec[sort_indeces[1:Int(round(mean(metrics_old.n_selected_distribution)))]] .= 1.
 classification_metrics.wrapper_metrics(
     data_dict["beta"] .!= 0.,
     sel_vec .> 0.
 )
 
-range_included = Int.(maximum(n_selected_distribution))
+range_included = Int.(range(minimum(metrics_old.n_selected_distribution), maximum(metrics_old.n_selected_distribution)))
 fdr_vec = []
 tpr_vec = []
 
-for jj = 1:range_included
+for jj in range_included
     sel_vec = zeros(p)
     sel_vec[sort_indeces[1:jj]] .= 1.
     met = classification_metrics.wrapper_metrics(
@@ -354,3 +338,17 @@ xlabel!("# Included Variables", labelfontsize=15)
 # title!("FDR", titlefontsize=20)
 savefig(plt, joinpath(abs_project_path, "results", "simulations", "$(label_files)_fdrtpr_scatter.pdf"))
 
+
+metrics_new = MirrorStatistic.optimal_inclusion(
+    ms_dist_vec=ms_dist_vec,
+    mc_samples=MC_SAMPLES,
+    beta_true=data_dict["beta"],
+    fdr_target=0.1
+)
+
+boxplot(metrics_new.fdr_distribution, label="FDR")
+boxplot!(metrics_new.tpr_distribution, label="TPR")
+
+metrics_new.metrics_mean
+metrics_new.metrics_median
+scatter(metrics_new.inclusion_prob)
