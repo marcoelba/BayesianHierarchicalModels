@@ -9,7 +9,7 @@ abs_project_path = normpath(joinpath(@__FILE__, "..", "..", ".."))
 include(joinpath(abs_project_path, "src", "utils", "mirror_statistic.jl"))
 include(joinpath(abs_project_path, "src", "utils", "classification_metrics.jl"))
 
-label_files = "ms_analysis"
+label_files = "ms_analysis_partial_identification"
 
 function mean_folded_normal(mu, sigma)
     sigma * sqrt(2/pi) * exp(-0.5 *(mu/sigma)^2) + mu * (1 - 2*cdf(Normal(), -(mu/sigma)))
@@ -29,12 +29,12 @@ true_coef = vcat(zeros(p0), ones(p1))
 
 fdr_target = 0.1
 fp = 0
-fn = 0
+fn = 50
 
 Random.seed!(35)
 
 posterior_mean_null = vcat(randn(p0 - fp) * 0.0, rand([-0.1, 0.1], fp))
-posterior_mean_active = vcat(randn(p1 - fn) * 0.05 .+ 1., randn(fn) * 0.01)
+posterior_mean_active = vcat(randn(p1 - fn) * 0.05 .+ 1., randn(fn) * 0.1)
 
 posterior_mean = vcat(posterior_mean_null, posterior_mean_active)
 
@@ -49,6 +49,13 @@ posterior = arraydist([
 ])
 
 mc_samples = 2000
+
+Random.seed!(123)
+plt = scatter(rand(posterior), label=false, markersize=3)
+xlabel!("Coefficients", labelfontsize=15)
+vspan!(plt, [p0+1, p], color = :green, alpha = 0.2, labels = "true active coefficients");
+display(plt)
+savefig(plt, joinpath(abs_project_path, "results", "ms_analysis", "$(label_files)_sample_posterior.pdf"))
 
 
 # null posteriors
@@ -79,13 +86,14 @@ ms_dist_vec = arraydist([
 scatter(mean_vec)
 scatter(rand(ms_dist_vec))
 
+mc_samples = 2000
 # no MC loop
 mirror_coefficients = rand(ms_dist_vec, mc_samples)
 opt_t = 0
 t = 0
 for t in range(0., maximum(mirror_coefficients), length=2000)
-    n_left_tail = sum(mirror_coefficients .< -t, dims=1)
-    n_right_tail = sum(mirror_coefficients .> t, dims=1)
+    n_left_tail = sum(mirror_coefficients .< -t)
+    n_right_tail = sum(mirror_coefficients .> t)
     n_right_tail = ifelse(n_right_tail .> 0, n_right_tail, 1)
 
     fdp = n_left_tail ./ n_right_tail
@@ -100,8 +108,21 @@ inclusion_matrix = mirror_coefficients .> opt_t
 n_inclusion_per_mc = sum(inclusion_matrix, dims=1)[1,:]
 histogram(n_inclusion_per_mc)
 average_inclusion_number = Int(round(mean(n_inclusion_per_mc)))
-sum(mirror_coefficients .> opt_t, dims=2)[:,1]
-sort_indices = sortperm(sum(mirror_coefficients .> opt_t, dims=2)[:,1], rev=true)
+
+n_inclusion_per_coef = sum(inclusion_matrix, dims=2)[:,1]
+mean_inclusion_per_coef = mean(inclusion_matrix, dims=2)[:,1]
+scatter(n_inclusion_per_coef)
+
+plt = scatter(mean_inclusion_per_coef, label=false)
+xlabel!("Regression Coefficients", labelfontsize=15)
+ylabel!("Inclusion Probability", labelfontsize=15)
+vspan!(plt, [p0+1, p], color = :green, alpha = 0.2, labels = "true active coefficients");
+display(plt)
+savefig(plt, joinpath(abs_project_path, "results", "ms_analysis", "$(label_files)_mean_selection_matrix.pdf"))
+
+sum(mean_inclusion_per_coef .> 0.1)
+
+sort_indices = sortperm(n_inclusion_per_coef, rev=true)
 
 selection = zeros(p)
 selection[sort_indices[1:average_inclusion_number]] .= 1
@@ -123,17 +144,31 @@ end
 boxplot(fdr)
 
 fdr = []
+tpr = []
 for mc in eachcol(inclusion_matrix)
     metrics = classification_metrics.wrapper_metrics(
         true_coef .> 0.,
         mc .> 0
     )
     push!(fdr, metrics.fdr)
+    push!(tpr, metrics.tpr)
 end
 boxplot(fdr)
+boxplot!(tpr)
+mean(fdr)
+mean(tpr)
+
+# histograms
+plt_n = histogram(n_inclusion_per_mc, label="# inc. covs")
+vline!([mean(n_inclusion_per_mc)], color="red", label="Mean #", linewidth=5)
+plt_fdr = histogram(fdr, label="FDR")
+vline!([mean(fdr)], color="red", label="Mean FDR", linewidth=5)
+
+plt = plot(plt_fdr, plt_n)
+savefig(plt, joinpath(abs_project_path, "results", "ms_analysis", "$(label_files)_bayesian_fdr_n.pdf"))
 
 
-# MC loop
+# -------------- MC loop -------------
 output = zeros(mc_samples)
 fdr = []
 tpr = []
