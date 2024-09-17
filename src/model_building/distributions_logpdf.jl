@@ -1,6 +1,7 @@
 # Log Likelihood functions
 
 module DistributionsLogPdf
+using LogExpFunctions: log1pexp
 
 function log_normal(
     x::AbstractArray{Float32},
@@ -35,6 +36,14 @@ function log_half_cauchy(
     sigma::Float32=s
     )
     log(2f0) .- log.(Float32(pi) .* sigma) .- log.(1f0 .+ (x ./ sigma).^2f0)
+end
+
+function log_bernoulli_from_logit(x::AbstractArray, logitp::AbstractArray)
+    @. - (1 - x) * log1pexp(logitp) - x * log1pexp(-logitp)
+end
+
+function log_bernoulli_from_logit(x::Float32, logitp::Float32)
+    x == 0 ? -log1pexp(logitp) : (x == 1 ? -log1pexp(-logitp) : oftype(float(logitp), -Inf))
 end
 
 end

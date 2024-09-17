@@ -16,7 +16,6 @@ include(joinpath(abs_project_path, "src", "utils", "mixed_models_data_generation
 
 
 n_individuals = 50
-n_time_points = 5
 
 p = 100
 prop_non_zero = 0.1
@@ -26,12 +25,10 @@ corr_factor = 0.5
 beta_time=Float32.([0, 2, 0, 0, 0])
 beta_pool=Float32.([-1., 1])
 
-data_dict = generate_mixed_model_data(;
-    n_individuals=n_individuals, n_time_points=n_time_points,
-    p=p, p1=p1, p0=p0, corr_factor=corr_factor, beta_pool=beta_pool,
-    include_random_int=true, random_int_from_pool=false, random_intercept_sd=0.5,
-    include_random_time=true, beta_time=beta_time,
-    include_random_slope=false, random_seed=12
+data_dict = generate_logistic_model_data(;
+    n_individuals, class_threshold=0.5f0,
+    p, p1, p0, beta_pool=Float32.([-1., -2., 1, 2]), obs_noise_sd=0.5, corr_factor=0.5,
+    random_seed=124, dtype=Float32
 )
 
 n_chains = 2

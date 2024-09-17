@@ -75,7 +75,7 @@ update_parameters_dict(
     size=1,
     bij=StatsFuns.softplus,
     log_prob_fun=x::Float32 -> Distributions.logpdf(
-        truncated(Normal(0f0, 0.5f0), 0f0, Inf32),
+        truncated(Normal(0f0, 0.2f0), 0f0, Inf32),
         x
     )
 )
@@ -170,71 +170,65 @@ metrics = MirrorStatistic.optimal_inclusion(
 
 boxplot(metrics.fdr_distribution, label="FDR")
 boxplot!(metrics.tpr_distribution, label="TPR")
+# range
+boxplot(metrics.fdr_range, label="FDR")
+boxplot!(metrics.tpr_range, label="TPR")
 
 metrics.metrics_mean
 metrics.metrics_median
-scatter(mean(metrics.inclusion_matrix, dims=2))
+plt = scatter_sel_matrix(metrics.inclusion_matrix, p0=p0)
 
 
-MirrorStatistic.wrapper_metrics(
-    data_dict["beta"] .!= 0.,
-    metrics.inclusion_matrix[:, 10] .!= 0.
-)
+# Data splitting
+include(joinpath(abs_project_path, "src", "utils", "variable_selection_plus_inference.jl"))
+ds_fdr = []
+ds_tpr = []
 
-sum_per_coef = sum(metrics.inclusion_matrix, dims=2)[:,1]
-sum_per_mc = sum(metrics.inclusion_matrix, dims=1)
+for simu = 1:n_simulations
 
-fdr = []
-n_in = []
-for mc = 1:MC_SAMPLES
-    mm = MirrorStatistic.wrapper_metrics(
-        data_dict["beta"] .!= 0.,
-        metrics.inclusion_matrix[:, mc]
+    println("Simulation: $(simu)")
+
+    data_dict = generate_linear_model_data(
+        n_individuals=n_individuals,
+        p=p, p1=p1, p0=p0, corr_factor=corr_factor,
+        random_seed=123
     )
-    push!(fdr, mm.fdr)
-    push!(n_in, sum(metrics.inclusion_matrix[:, mc]))
+
+    res = variable_selection_plus_inference.lasso_plus_ols(;
+        X1=Float64.(data_dict["X"][1:Int(n_individuals/2), :]),
+        X2=Float64.(data_dict["X"][Int(n_individuals/2)+1:end, :]),
+        y1=Float64.(data_dict["y"][1:Int(n_individuals/2)]),
+        y2=Float64.(data_dict["y"][Int(n_individuals/2)+1:end]),
+        add_intercept=true,
+        alpha_lasso=1.
+    )
+
+    beta_1 = res[1]
+    beta_2 = res[2]
+
+    mirror_coeffs = MirrorStatistic.mirror_statistic(beta_1, beta_2)
+
+    opt_t = MirrorStatistic.get_t(mirror_coeffs; fdr_target=0.1)
+    n_selected = sum(mirror_coeffs .> opt_t)
+
+    metrics = MirrorStatistic.wrapper_metrics(
+        data_dict["beta"] .!= 0.,
+        mirror_coeffs .> opt_t
+    )
+
+    push!(ds_fdr, metrics.fdr)
+    push!(ds_tpr, metrics.tpr)
+
 end
 
-histogram(fdr)
-mean(fdr)
-histogram(n_in)
-mean(n_in)
-scatter(n_in, fdr)
-fdr_n_in = hcat(fdr, n_in)
-fdr_n_in
 
-histogram(fdr_n_in[n_in .== 20, 1])
-mean(fdr_n_in[n_in .== 20, 1])
-selection = sum(metrics.inclusion_matrix[:, n_in .== 20], dims=2)[:, 1] .> 0
-MirrorStatistic.wrapper_metrics(
-    data_dict["beta"] .!= 0.,
-    selection
-)
+plt_tpr = boxplot(ds_tpr, label=false)
+xaxis!([])
+title!("TPR", titlefontsize=20)
 
+plt_fdr = boxplot(ds_fdr, label=false)
+xaxis!([])
+title!("FDR", titlefontsize=20)
 
-# older method
-metrics = MirrorStatistic.fdr_distribution(
-    ms_dist_vec=ms_dist,
-    mc_samples=MC_SAMPLES,
-    beta_true=data_dict["beta"],
-    fdr_target=0.1
-)
-
-plt = fdr_n_hist(metrics)
-
-plt = scatter_sel_matrix(metrics, p0=p0)
-display(plt)
-
-sort_indeces = sortperm(mean(metrics.selection_matrix, dims=2)[:,1], rev=true)
-
-sel_vec = zeros(p)
-sel_vec[sort_indeces[1:Int(round(mean(metrics.n_selected_distribution)))]] .= 1.
-MirrorStatistic.wrapper_metrics(
-    data_dict["beta"] .!= 0.,
-    sel_vec .> 0.
-)
-
-MirrorStatistic.wrapper_metrics(
-    data_dict["beta"] .!= 0.,
-    metrics.selection_matrix[:, 20] .!= 0.
-)
+plt = plot(plt_fdr, plt_tpr)
+savefig(plt, joinpath(abs_project_path, "results", "simulations", "$(label_files)_fdrtpr_boxplot_DS.pdf"))

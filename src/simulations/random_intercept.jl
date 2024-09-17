@@ -1,4 +1,4 @@
-# Simulations linear model
+# Simulations linear random Intercept model
 using CSV
 using DataFrames
 
@@ -19,17 +19,21 @@ include(joinpath(abs_project_path, "src", "utils", "mixed_models_data_generation
 
 
 n_individuals = 200
+n_time_points = 5
 
 p = 1000
-prop_non_zero = 0.05
+prop_non_zero = 0.025
 p1 = Int(p * prop_non_zero)
 p0 = p - p1
 corr_factor = 0.5
+beta_time=Float32.([0, 2, 0, 0, 0])
+beta_pool=Float32.([-1., 1])
 
 n_chains = 2
 num_iter = 2000
 MC_SAMPLES=2000
 fdr_target = 0.1
+
 n_simulations = 10
 random_seed = 1234
 simulations_models = Dict()
@@ -40,9 +44,27 @@ params_dict = OrderedDict()
 # beta 0
 update_parameters_dict(
     params_dict;
-    name="beta0",
+    name="beta0_fixed",
     size=1,
     log_prob_fun=x::Float32 -> DistributionsLogPdf.log_normal(x)
+)
+update_parameters_dict(
+    params_dict;
+    name="sigma_beta0",
+    size=n_individuals,
+    bij=StatsFuns.softplus,
+    log_prob_fun=x::AbstractArray{Float32} -> DistributionsLogPdf.log_half_cauchy(
+        x, sigma=Float32.(ones(n_individuals) * 0.1)
+    )
+)
+update_parameters_dict(
+    params_dict;
+    name="beta0_random",
+    size=n_individuals,
+    log_prob_fun=(x::AbstractArray{Float32}, sigma::AbstractArray{Float32}) -> DistributionsLogPdf.log_normal(
+        x, sigma=sigma
+    ),
+    dependency=["sigma_beta0"]
 )
 
 # beta fixed
@@ -55,10 +77,26 @@ update_parameters_dict(
 )
 update_parameters_dict(
     params_dict;
-    name="beta",
+    name="beta_fixed",
     size=p,
     log_prob_fun=(x::AbstractArray{Float32}, sigma::AbstractArray{Float32}) -> DistributionsLogPdf.log_normal(x, sigma=sigma),
     dependency=["sigma_beta"]
+)
+
+# beta time
+update_parameters_dict(
+    params_dict;
+    name="sigma_beta_time",
+    size=1,
+    bij=StatsFuns.softplus,
+    log_prob_fun=x::Float32 -> DistributionsLogPdf.log_half_cauchy(x, sigma=1f0)
+)
+update_parameters_dict(
+    params_dict;
+    name="beta_time",
+    size=n_time_points,
+    log_prob_fun=(x::AbstractArray{Float32}, sigma::Float32) -> DistributionsLogPdf.log_normal(x, sigma=Float32.(ones(n_time_points)).*sigma),
+    dependency=["sigma_beta_time"]
 )
 
 # sigma y
@@ -68,7 +106,7 @@ update_parameters_dict(
     size=1,
     bij=StatsFuns.softplus,
     log_prob_fun=x::Float32 -> Distributions.logpdf(
-        truncated(Normal(0f0, 0.2f0), 0f0, Inf32),
+        truncated(Normal(0f0, 0.5f0), 0f0, Inf32),
         x
     )
 )
@@ -79,16 +117,18 @@ for simu = 1:n_simulations
 
     println("Simulation: $(simu)")
 
-    data_dict = generate_linear_model_data(
-        n_individuals=n_individuals,
-        p=p, p1=p1, p0=p0, corr_factor=corr_factor,
-        random_seed=random_seed + simu
+    data_dict = generate_mixed_model_data(;
+        n_individuals=n_individuals, n_time_points=n_time_points,
+        p=p, p1=p1, p0=p0, corr_factor=corr_factor, beta_pool=beta_pool,
+        include_random_int=true, random_int_from_pool=false, random_intercept_sd=0.5,
+        include_random_time=true, beta_time=beta_time,
+        include_random_slope=false, random_seed=random_seed+simu
     )
     
     # model predictions
-    model(theta_components) = Predictors.linear_model(
+    model(theta_components) = Predictors.linear_random_intercept_model(
         theta_components;
-        X=data_dict["X"]
+        Xfix=data_dict["Xfix"]
     )
 
     # model log joint
@@ -125,15 +165,15 @@ for simu = 1:n_simulations
 
     ms_dist = MirrorStatistic.posterior_ms_coefficients(
         vi_posterior=vi_posterior,
-        prior="beta",
+        prior="beta_fixed",
         params_dict=params_dict
     )
     
     metrics = MirrorStatistic.optimal_inclusion(
         ms_dist_vec=ms_dist,
         mc_samples=MC_SAMPLES,
-        beta_true=data_dict["beta"],
-        fdr_target=0.1
+        beta_true=data_dict["beta_fixed"],
+        fdr_target=fdr_target
     )
     metrics_dict = Dict()
 
@@ -148,7 +188,7 @@ for simu = 1:n_simulations
 end
 
 
-label_files = "algo_HS_linear_n$(n_individuals)_p$(p)_active$(p1)_r$(Int(corr_factor*100))"
+label_files = "algo_HS_rand_int_n$(n_individuals)_T$(n_time_points)_p$(p)_active$(p1)_r$(Int(corr_factor*100))"
 
 median_fdr = []
 median_tpr = []
@@ -246,16 +286,18 @@ savefig(plt, joinpath(abs_project_path, "results", "simulations", "$(label_files
 # --------------------------------------------------------------------
 # Single Run of Bayesian Model
 
-data_dict = generate_linear_model_data(
-    n_individuals=n_individuals,
-    p=p, p1=p1, p0=p0, corr_factor=corr_factor,
-    random_seed=random_seed
+data_dict = generate_mixed_model_data(;
+    n_individuals=n_individuals, n_time_points=n_time_points,
+    p=p, p1=p1, p0=p0, corr_factor=corr_factor, beta_pool=beta_pool,
+    include_random_int=true, random_int_from_pool=true, random_intercept_sd=0.5,
+    include_random_time=true, beta_time=beta_time,
+    include_random_slope=false, random_seed=random_seed
 )
 
 # model predictions
-model(theta_components) = Predictors.linear_model(
+model(theta_components) = Predictors.linear_random_intercept_model(
     theta_components;
-    X=data_dict["X"]
+    Xfix=data_dict["Xfix"]
 )
 
 # model log joint
@@ -291,7 +333,7 @@ samples_posterior = posterior_samples(
     n_samples=MC_SAMPLES
 )
 beta_samples = extract_parameter(
-    prior="beta",
+    prior="beta_fixed",
     params_dict=params_dict,
     samples_posterior=samples_posterior
 )
@@ -299,18 +341,37 @@ plt = density(beta_samples', label=false)
 ylabel!("Density")
 savefig(plt, joinpath(abs_project_path, "results", "simulations", "$(label_files)_posterior_beta.pdf"))
 
+
+beta0_samples = extract_parameter(
+    prior="beta0_random",
+    params_dict=params_dict,
+    samples_posterior=samples_posterior
+)
+plt = density(beta0_samples', label=false)
+ylabel!("Density")
+savefig(plt, joinpath(abs_project_path, "results", "simulations", "$(label_files)_posterior_beta.pdf"))
+
+beta_time_samples = extract_parameter(
+    prior="beta_time",
+    params_dict=params_dict,
+    samples_posterior=samples_posterior
+)
+plt = density(beta_time_samples', label=false)
+ylabel!("Density")
+savefig(plt, joinpath(abs_project_path, "results", "simulations", "$(label_files)_posterior_beta.pdf"))
+
 # ------ Mirror Statistic ------
 
 ms_dist = MirrorStatistic.posterior_ms_coefficients(
     vi_posterior=vi_posterior,
-    prior="beta",
+    prior="beta_fixed",
     params_dict=params_dict
 )
 
 metrics = MirrorStatistic.optimal_inclusion(
     ms_dist_vec=ms_dist,
     mc_samples=MC_SAMPLES,
-    beta_true=data_dict["beta"],
+    beta_true=data_dict["beta_fixed"],
     fdr_target=fdr_target
 )
 
@@ -327,5 +388,6 @@ boxplot!(metrics.tpr_range, label="TPR")
 
 metrics.metrics_mean
 metrics.metrics_median
+
 plt = scatter_sel_matrix(metrics.inclusion_matrix, p0=p0)
 savefig(plt, joinpath(abs_project_path, "results", "simulations", "$(label_files)_inclusion_probs.pdf"))

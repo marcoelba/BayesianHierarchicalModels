@@ -91,7 +91,7 @@ function fdr_distribution(;ms_dist_vec, mc_samples::Int64, beta_true, fdr_target
         fdr_distribution=fdr_distribution,
         tpr_distribution=tpr_distribution,
         n_selected_distribution=n_selected_distribution,
-        selection_matrix=selection_matrix
+        inclusion_matrix=selection_matrix
     )
 end
 
@@ -106,8 +106,8 @@ function optimal_inclusion(;ms_dist_vec, mc_samples::Int64, beta_true, fdr_targe
     n_inclusion_per_mc = sum(inclusion_matrix, dims=1)[1,:]
     sort_indices = sortperm(sum(mirror_coefficients .> opt_t, dims=2)[:,1], rev=true)
 
-    fdr = []
-    tpr = []
+    fdr_range = []
+    tpr_range = []
     for n in range(minimum(n_inclusion_per_mc), maximum(n_inclusion_per_mc))
         selection = zeros(p)
         selection[sort_indices[1:n]] .= 1
@@ -115,8 +115,8 @@ function optimal_inclusion(;ms_dist_vec, mc_samples::Int64, beta_true, fdr_targe
             beta_true .!= 0.,
             selection .> 0
         )
-        push!(fdr, metrics.fdr)
-        push!(tpr, metrics.tpr)
+        push!(fdr_range, metrics.fdr)
+        push!(tpr_range, metrics.tpr)
 
     end
 
@@ -133,12 +133,28 @@ function optimal_inclusion(;ms_dist_vec, mc_samples::Int64, beta_true, fdr_targe
         selection .> 0
     )
 
+    # get FDR distribution over all MC samples
+    fdr_distribution = zeros(mc_samples)
+    tpr_distribution = zeros(mc_samples)
+
+    for nn = 1:mc_samples
+        metrics = wrapper_metrics(
+            beta_true .!= 0.,
+            inclusion_matrix[:, nn]
+        )
+        fdr_distribution[nn] = metrics.fdr
+        tpr_distribution[nn] = metrics.tpr
+    end
+
     return (
-        fdr_distribution=fdr,
-        tpr_distribution=tpr,
+        fdr_range=fdr_range,
+        tpr_range=tpr_range,
+        fdr_distribution=fdr_distribution,
+        tpr_distribution=tpr_distribution,
         metrics_mean=metrics_mean,
         metrics_median=metrics_median,
         inclusion_matrix=inclusion_matrix,
+        n_inclusion_per_mc=n_inclusion_per_mc,
         opt_t=opt_t
     )
 end
