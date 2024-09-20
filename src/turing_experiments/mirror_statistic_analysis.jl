@@ -120,7 +120,7 @@ vspan!(plt, [p0+1, p], color = :green, alpha = 0.2, labels = "true active coeffi
 display(plt)
 savefig(plt, joinpath(abs_project_path, "results", "ms_analysis", "$(label_files)_mean_selection_matrix.pdf"))
 
-sum(mean_inclusion_per_coef .> 0.1)
+sum(mean_inclusion_per_coef .> 0.5)
 
 sort_indices = sortperm(n_inclusion_per_coef, rev=true)
 
@@ -157,6 +157,42 @@ boxplot(fdr)
 boxplot!(tpr)
 mean(fdr)
 mean(tpr)
+
+
+# cumulative inclusion
+dimension_subsets = sum(inclusion_matrix, dims=1)
+relative_inclusion_freq = mean(inclusion_matrix ./ dimension_subsets, dims=2)[:, 1]
+
+sort_relative_inclusion_freq = sort(relative_inclusion_freq)
+sort_cumsum = cumsum(sort_relative_inclusion_freq)
+
+cutoff = 0
+for jj = 1:p
+    if sort_cumsum[jj] > fdr_target
+        cutoff = jj - 1
+        break
+    end
+end
+
+min_inclusion_freq=sort_relative_inclusion_freq[cutoff]
+range_p = collect(range(1, p))
+scatter(relative_inclusion_freq, markersize=3, label="Sorted relative inclusion freq")
+hline!([min_inclusion_freq], label="Cutoff inclusion", linewidth=2)
+sum(relative_inclusion_freq .> min_inclusion_freq)
+
+excluded = relative_inclusion_freq .<= min_inclusion_freq
+included = relative_inclusion_freq .> min_inclusion_freq
+
+plt = scatter(range_p[excluded], relative_inclusion_freq[excluded], label="Out")
+scatter!(range_p[included], relative_inclusion_freq[included], label="In")
+vspan!(plt, [p0 + 1, p], color = :green, alpha = 0.2, labels = "true active coefficients")
+
+selection = relative_inclusion_freq .> min_inclusion_freq
+metrics_relative = classification_metrics.wrapper_metrics(
+    true_coef .!= 0.,
+    selection
+)
+
 
 # histograms
 plt_n = histogram(n_inclusion_per_mc, label="# inc. covs")
@@ -197,6 +233,51 @@ end
 mean(output)
 mean(fdr)
 mode(fdr)
+mean(tpr)
+
+# cumulative inclusion
+dimension_subsets = sum(selection_matrix, dims=1)
+relative_inclusion_freq = mean(selection_matrix ./ dimension_subsets, dims=2)[:, 1]
+
+sort_relative_inclusion_freq = sort(relative_inclusion_freq)
+sort_indices = sortperm(relative_inclusion_freq, rev=false)
+sort_cumsum = cumsum(sort_relative_inclusion_freq)
+
+cutoff = 0
+for jj = 1:p
+    if sort_cumsum[jj] > fdr_target
+        cutoff = jj - 1
+        break
+    end
+end
+
+cutoff
+sort_cumsum[cutoff]
+
+min_inclusion_freq = sort_relative_inclusion_freq[cutoff]
+
+sum(sort_indices .>= cutoff)
+sum(relative_inclusion_freq .>= min_inclusion_freq)
+
+plt = scatter(relative_inclusion_freq)
+hline!([min_inclusion_freq])
+vspan!(plt, [p0 + 1, p], color = :green, alpha = 0.2, labels = "true active coefficients")
+
+excluded = relative_inclusion_freq .<= min_inclusion_freq
+included = relative_inclusion_freq .> min_inclusion_freq
+range_p = collect(range(1, p))
+
+plt = scatter(range_p[excluded], relative_inclusion_freq[excluded], label="Out")
+scatter!(range_p[included], relative_inclusion_freq[included], label="In")
+vspan!(plt, [p0 + 1, p], color = :green, alpha = 0.2, labels = "true active coefficients")
+
+selection = relative_inclusion_freq .>= sort_relative_inclusion_freq[cutoff]
+
+classification_metrics.wrapper_metrics(
+    true_coef .> 0.,
+    selection .> 0
+)
+
 
 histogram(optimal_t)
 
@@ -211,9 +292,16 @@ savefig(plt, joinpath(abs_project_path, "results", "ms_analysis", "$(label_files
 
 mean_selection_matrix = mean(selection_matrix, dims=2)[:, 1]
 plt = scatter(mean_selection_matrix, label=false)
+vspan!(plt, [p0 + 1, p], color = :green, alpha = 0.2, labels = "true active coefficients")
 xlabel!("Regression Coefficients", labelfontsize=15)
 ylabel!("Inclusion Probability", labelfontsize=15)
 savefig(plt, joinpath(abs_project_path, "results", "ms_analysis", "$(label_files)_mean_selection_matrix.pdf"))
+
+scatter(sort_indices[excluded], mean_selection_matrix[excluded])
+scatter!(sort_indices[included], mean_selection_matrix[included])
+vspan!(plt, [p0 + 1, p], color = :green, alpha = 0.2, labels = "true active coefficients")
+xlabel!("Regression Coefficients", labelfontsize=15)
+ylabel!("Inclusion Probability", labelfontsize=15)
 
 classification_metrics.wrapper_metrics(
     true_coef .> 0.,

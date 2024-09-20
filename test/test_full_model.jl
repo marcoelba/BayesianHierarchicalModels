@@ -15,19 +15,17 @@ include(joinpath(abs_project_path, "src", "model_building", "mirror_statistic.jl
 include(joinpath(abs_project_path, "src", "utils", "mixed_models_data_generation.jl"))
 
 
-n_individuals = 50
+n_individuals = 100
 
-p = 100
+p = 200
 prop_non_zero = 0.1
 p1 = Int(p * prop_non_zero)
 p0 = p - p1
 corr_factor = 0.5
-beta_time=Float32.([0, 2, 0, 0, 0])
-beta_pool=Float32.([-1., 1])
 
 data_dict = generate_logistic_model_data(;
     n_individuals, class_threshold=0.5f0,
-    p, p1, p0, beta_pool=Float32.([-1., -2., 1, 2]), obs_noise_sd=0.5, corr_factor=0.5,
+    p, p1, p0, beta_pool=Float32.([-2., 2]), obs_noise_sd=0.5, corr_factor=0.5,
     random_seed=124, dtype=Float32
 )
 
@@ -40,32 +38,15 @@ params_dict = OrderedDict()
 # beta 0
 update_parameters_dict(
     params_dict;
-    name="beta0_fixed",
+    name="beta0",
     size=1,
     log_prob_fun=x::Float32 -> DistributionsLogPdf.log_normal(x)
-)
-update_parameters_dict(
-    params_dict;
-    name="sigma_beta0",
-    size=n_individuals,
-    bij=StatsFuns.softplus,
-    log_prob_fun=x::AbstractArray{Float32} -> sum(Distributions.logpdf.(
-        truncated(Cauchy(0f0, 0.1f0), 0f0, Inf32),
-        x
-    ))
-)
-update_parameters_dict(
-    params_dict;
-    name="beta0_random",
-    size=n_individuals,
-    log_prob_fun=(x::AbstractArray{Float32}, sigma::AbstractArray{Float32}) -> DistributionsLogPdf.log_normal(x, sigma=sigma),
-    dependency=["sigma_beta0"]
 )
 
 # beta fixed
 update_parameters_dict(
     params_dict;
-    name="tau_sigma",
+    name="sigma_beta",
     size=p,
     bij=StatsFuns.softplus,
     log_prob_fun=x::AbstractArray{Float32} -> sum(Distributions.logpdf.(
@@ -75,61 +56,22 @@ update_parameters_dict(
 )
 update_parameters_dict(
     params_dict;
-    name="sigma_beta",
-    size=p,
-    bij=StatsFuns.softplus,
-    log_prob_fun=(x::AbstractArray{Float32}, sigma::AbstractArray{Float32}) -> sum(Distributions.logpdf.(
-        truncated(Cauchy(0f0, sigma), 0f0, Inf32),
-        x
-    )),
-    dependency=["tau_sigma"]
-)
-update_parameters_dict(
-    params_dict;
-    name="beta_fixed",
+    name="beta",
     size=p,
     log_prob_fun=(x::AbstractArray{Float32}, sigma::AbstractArray{Float32}) -> DistributionsLogPdf.log_normal(x, sigma=sigma),
     dependency=["sigma_beta"]
 )
 
-# beta time
-update_parameters_dict(
-    params_dict;
-    name="sigma_beta_time",
-    size=1,
-    bij=StatsFuns.softplus,
-    log_prob_fun=x::Float32 -> Distributions.logpdf(
-        truncated(Normal(0f0, 1f0), 0f0, Inf32),
-        x
-    )
-)
-update_parameters_dict(
-    params_dict;
-    name="beta_time",
-    size=n_time_points,
-    log_prob_fun=(x::AbstractArray{Float32}, sigma::Float32) -> DistributionsLogPdf.log_normal(x, sigma=Float32.(ones(n_time_points)).*sigma),
-    dependency=["sigma_beta_time"]
-)
-
-# sigma y
-update_parameters_dict(
-    params_dict;
-    name="sigma_y",
-    size=1,
-    bij=StatsFuns.softplus,
-    log_prob_fun=x::Float32 -> Distributions.logpdf(
-        truncated(Normal(0f0, 1f0), 0f0, Inf32),
-        x
-    )
-)
-
 theta_axes, _ = get_parameters_axes(params_dict)
 
 # model predictions
-model(theta_components) = Predictors.linear_random_intercept_model(
+model(theta_components) = Predictors.linear_predictor(
     theta_components;
-    Xfix=data_dict["Xfix"]
+    X=data_dict["X"]
 )
+model(get_parameters_axes(params_dict)[2])
+
+DistributionsLogPdf.log_bernoulli_from_logit(data_dict["y"], model(get_parameters_axes(params_dict)[2])...)
 
 # model
 partial_log_joint(theta) = log_joint(
@@ -137,7 +79,7 @@ partial_log_joint(theta) = log_joint(
     params_dict=params_dict,
     theta_axes=theta_axes,
     model=model,
-    log_likelihood=DistributionsLogPdf.log_normal,
+    log_likelihood=DistributionsLogPdf.log_bernoulli_from_logit,
     label=data_dict["y"]
 )
 partial_log_joint(Float32.(randn(params_dict["tot_params"])))
@@ -168,7 +110,7 @@ samples_posterior = posterior_samples(
     n_samples=MC_SAMPLES
 )
 beta_samples = extract_parameter(
-    prior="beta_fixed",
+    prior="beta",
     params_dict=params_dict,
     samples_posterior=samples_posterior
 )
@@ -178,21 +120,29 @@ plt = density(beta_samples', label=false)
 # Mirror Statistic
 ms_dist = MirrorStatistic.posterior_ms_coefficients(
     vi_posterior=vi_posterior,
-    prior="beta_fixed",
+    prior="beta",
     params_dict=params_dict
 )
 plt = density(rand(ms_dist, MC_SAMPLES)', label=false)
 
-class_distributions = MirrorStatistic.fdr_distribution(
+metrics = MirrorStatistic.optimal_inclusion(
     ms_dist_vec=ms_dist,
     mc_samples=MC_SAMPLES,
-    beta_true=data_dict["beta_fixed"],
+    beta_true=data_dict["beta"],
     fdr_target=0.1
 )
 
-plt = fdr_n_hist(class_distributions)
-display(plt)
-savefig(plt, joinpath(abs_project_path, "results", "simulations", "$(label_files)_fdr_n_hist.pdf"))
+# distribution
+boxplot(metrics.fdr_distribution, label="FDR")
+boxplot!(metrics.tpr_distribution, label="TPR")
 
-plt = scatter_sel_matrix(class_distributions, p0=p0)
-display(plt)
+plt = fdr_n_hist(metrics)
+
+# range
+boxplot(metrics.fdr_range, label="FDR")
+boxplot!(metrics.tpr_range, label="TPR")
+
+metrics.metrics_mean
+metrics.metrics_median
+
+plt = scatter_sel_matrix(metrics.inclusion_matrix, p0=p0)

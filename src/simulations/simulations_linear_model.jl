@@ -142,7 +142,8 @@ for simu = 1:n_simulations
     
     metrics_dict["metrics_mean"] = metrics.metrics_mean
     metrics_dict["metrics_median"] = metrics.metrics_median
-    
+    metrics_dict["metrics_relative"] = metrics.metrics_relative
+
     simulations_metrics[simu] = metrics_dict
 
 end
@@ -152,9 +153,11 @@ label_files = "algo_HS_linear_n$(n_individuals)_p$(p)_active$(p1)_r$(Int(corr_fa
 
 median_fdr = []
 median_tpr = []
+relative_fdr = []
 
 mean_fdr = []
 mean_tpr = []
+relative_tpr = []
 
 for simu = 1:n_simulations
     push!(median_fdr, simulations_metrics[simu]["metrics_median"].fdr)
@@ -162,6 +165,9 @@ for simu = 1:n_simulations
 
     push!(mean_fdr, simulations_metrics[simu]["metrics_mean"].fdr)
     push!(mean_tpr, simulations_metrics[simu]["metrics_mean"].tpr)
+
+    push!(relative_fdr, simulations_metrics[simu]["metrics_relative"].fdr)
+    push!(relative_tpr, simulations_metrics[simu]["metrics_relative"].tpr)
 
 end
 
@@ -176,11 +182,13 @@ CSV.write(
 
 plt_tpr = boxplot(mean_tpr, label=false)
 boxplot!(median_tpr, label=false)
+boxplot!(relative_tpr, label=false)
 xticks!([1, 2], ["Mean", "Median"], tickfontsize=10)
 title!("TPR", titlefontsize=20)
 
 plt_fdr = boxplot(mean_fdr, label=false)
 boxplot!(median_fdr, label=false)
+boxplot!(relative_fdr, label=false)
 xticks!([1, 2], ["Mean", "Median"], tickfontsize=10)
 title!("FDR", titlefontsize=20)
 
@@ -249,7 +257,7 @@ savefig(plt, joinpath(abs_project_path, "results", "simulations", "$(label_files
 data_dict = generate_linear_model_data(
     n_individuals=n_individuals,
     p=p, p1=p1, p0=p0, corr_factor=corr_factor,
-    random_seed=random_seed
+    random_seed=random_seed+1
 )
 
 # model predictions
@@ -328,4 +336,40 @@ boxplot!(metrics.tpr_range, label="TPR")
 metrics.metrics_mean
 metrics.metrics_median
 plt = scatter_sel_matrix(metrics.inclusion_matrix, p0=p0)
+
 savefig(plt, joinpath(abs_project_path, "results", "simulations", "$(label_files)_inclusion_probs.pdf"))
+
+metrics.metrics_relative
+
+range_p = collect(range(1, p))
+scatter(metrics.relative_inclusion_freq, markersize=3, label="Sorted relative inclusion freq")
+hline!([metrics.min_inclusion_freq], label="Cutoff inclusion", linewidth=2)
+sum(metrics.relative_inclusion_freq .> metrics.min_inclusion_freq)
+
+excluded = metrics.relative_inclusion_freq .<= metrics.min_inclusion_freq
+included = metrics.relative_inclusion_freq .> metrics.min_inclusion_freq
+range_p = collect(range(1, p))
+
+plt = scatter(range_p[excluded], metrics.relative_inclusion_freq[excluded], label="Out")
+scatter!(range_p[included], metrics.relative_inclusion_freq[included], label="In")
+vspan!(plt, [p0 + 1, p], color = :green, alpha = 0.2, labels = "true active coefficients")
+
+
+
+
+metrics = MirrorStatistic.fdr_distribution(
+    ms_dist_vec=ms_dist,
+    mc_samples=MC_SAMPLES,
+    beta_true=data_dict["beta"],
+    fdr_target=fdr_target
+)
+
+metrics.metrics_relative
+
+excluded = metrics.relative_inclusion_freq .<= metrics.min_inclusion_freq
+included = metrics.relative_inclusion_freq .> metrics.min_inclusion_freq
+range_p = collect(range(1, p))
+
+plt = scatter(range_p[excluded], metrics.relative_inclusion_freq[excluded], label="Out")
+scatter!(range_p[included], metrics.relative_inclusion_freq[included], label="In")
+vspan!(plt, [p0 + 1, p], color = :green, alpha = 0.2, labels = "true active coefficients")

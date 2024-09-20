@@ -42,7 +42,7 @@ function log_bernoulli_from_logit(x::AbstractArray, logitp::AbstractArray)
     @. - (1 - x) * log1pexp(logitp) - x * log1pexp(-logitp)
 end
 
-function log_bernoulli_from_logit(x::Float32, logitp::Float32)
+function log_bernoulli_from_logit(x::Real, logitp::Real)
     x == 0 ? -log1pexp(logitp) : (x == 1 ? -log1pexp(-logitp) : oftype(float(logitp), -Inf))
 end
 

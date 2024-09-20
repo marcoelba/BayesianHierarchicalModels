@@ -17,6 +17,17 @@ function linear_model(
 end
 
 
+function linear_predictor(
+    theta_c::ComponentArray;
+    X::AbstractArray,
+    )
+
+    mu = theta_c["beta0"] .+ X * theta_c["beta"]
+
+    return (mu,)
+end
+
+
 function linear_random_intercept_model(
     theta_c::ComponentArray;
     Xfix::AbstractArray
