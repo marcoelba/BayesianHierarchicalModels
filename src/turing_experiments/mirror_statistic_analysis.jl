@@ -29,7 +29,7 @@ true_coef = vcat(zeros(p0), ones(p1))
 
 fdr_target = 0.1
 fp = 0
-fn = 50
+fn = 0
 
 Random.seed!(35)
 
@@ -122,6 +122,39 @@ savefig(plt, joinpath(abs_project_path, "results", "ms_analysis", "$(label_files
 
 sum(mean_inclusion_per_coef .> 0.5)
 
+# Weighting by the average_inclusion_number
+weighted_sorted_inclusion = mean(inclusion_matrix ./ sum(inclusion_matrix, dims=1), dims=2)[:,1]
+scatter(weighted_sorted_inclusion[1:p0], mean_inclusion_per_coef[1:p0])
+
+sort_indices_by_incl_prob = sortperm(mean_inclusion_per_coef, rev=true)
+weighted_sorted_inclusion = sort(mean_inclusion_per_coef, rev=false) ./ average_inclusion_number
+cumsum_weighted_inclusion = cumsum(weighted_sorted_inclusion)
+plot(cumsum_weighted_inclusion)
+
+cutoff = 0
+for jj = 1:p
+    if cumsum_weighted_inclusion[jj] > fdr_target
+        cutoff = jj - 1
+        break
+    end
+end
+
+cumsum_weighted_inclusion[901]
+cumsum_weighted_inclusion[900]
+cumsum_weighted_inclusion[890]
+cumsum_weighted_inclusion[891]
+
+average_inclusion_number * (1-fdr_target)
+
+
+scatter(n_inclusion_per_mc, label=false)
+histogram(n_inclusion_per_mc, label=false)
+mean(n_inclusion_per_mc)
+std(n_inclusion_per_mc)
+
+
+
+# cutoff at the average
 sort_indices = sortperm(n_inclusion_per_coef, rev=true)
 
 selection = zeros(p)
@@ -131,7 +164,9 @@ metrics = classification_metrics.wrapper_metrics(
     selection .> 0
 )
 
+# range
 fdr = []
+tpr = []
 for n in range(minimum(n_inclusion_per_mc), maximum(n_inclusion_per_mc))
     selection = zeros(p)
     selection[sort_indices[1:n]] .= 1
@@ -140,9 +175,14 @@ for n in range(minimum(n_inclusion_per_mc), maximum(n_inclusion_per_mc))
         selection .> 0
     )
     push!(fdr, metrics.fdr)
+    push!(tpr, metrics.tpr)
 end
 boxplot(fdr)
 
+mean((fdr .- fdr_target).^2)
+
+
+# distribution
 fdr = []
 tpr = []
 for mc in eachcol(inclusion_matrix)
@@ -157,6 +197,9 @@ boxplot(fdr)
 boxplot!(tpr)
 mean(fdr)
 mean(tpr)
+
+density(fdr, fill=true)
+mean((fdr .- fdr_target).^2)
 
 
 # cumulative inclusion
@@ -192,6 +235,16 @@ metrics_relative = classification_metrics.wrapper_metrics(
     true_coef .!= 0.,
     selection
 )
+
+
+scatter(mean_inclusion_per_coef, relative_inclusion_freq)
+
+sort_indices = sortperm(mean_inclusion_per_coef, rev=false)
+sum(mean_inclusion_per_coef[sort_indices[1:cutoff]])
+sum(mean_inclusion_per_coef[sort_indices[1:cutoff]]) / average_inclusion_number
+
+sort_indices = sortperm(relative_inclusion_freq, rev=false)
+sum(relative_inclusion_freq[sort_indices[1:cutoff]])
 
 
 # histograms

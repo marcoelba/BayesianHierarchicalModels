@@ -116,13 +116,30 @@ function log_joint(theta; params_dict, theta_axes, model, log_likelihood, label)
 end
 
 
+function polynomial_decay(t::Int64; a::Float32=0.5f0, b::Float32=0.01f0, gamma::Float32=0.75f0)
+    a * (b + t)^(-gamma)
+end
+
+function cyclical_polynomial_decay(n_iter::Int64, n_cycles::Int64=2)
+    steps_per_cycle = Int(n_iter / n_cycles)
+    lr_schedule = []
+    for cycle = 1:n_cycles
+        push!(lr_schedule, polynomial_decay.(range(1, steps_per_cycle))...)
+    end
+    return lr_schedule
+end
+
+
 function training_loop(;
     log_joint,
     vi_dist,
     z_dim::Int64,
     n_iter::Int64,
     n_chains::Int64=1,
-    samples_per_step::Int64=4
+    samples_per_step::Int64=4,
+    sd_init::Float32=0.5f0,
+    use_noisy_grads::Bool=false,
+    n_cycles::Int64=2
     )
 
     elbo_trace = zeros(n_iter, n_chains)
@@ -145,8 +162,10 @@ function training_loop(;
         step = 1
 
         prog = ProgressMeter.Progress(n_iter, 1)
-        z = Float32.(randn(z_dim)) * 0.5f0
+        z = Float32.(randn(z_dim)) * sd_init
         diff_results = DiffResults.GradientResult(z)
+
+        lr_schedule = cyclical_polynomial_decay(n_iter, n_cycles)
 
         while (step ≤ n_iter) && !converged
             
@@ -167,7 +186,12 @@ function training_loop(;
             diff_grad = apply!(optimizer, z, gradient_step)
 
             # 4. Update parameters
-            @. z = z - diff_grad
+            if use_noisy_grads
+                grad_noise = Float32.(randn(z_dim)) .* lr_schedule[step]
+            else
+                grad_noise = 0f0
+            end
+            @. z = z - diff_grad + grad_noise
 
             # 5. Do whatever analysis you want - Store ELBO value
             elbo_trace[step, chain] = AdvancedVI.elbo(

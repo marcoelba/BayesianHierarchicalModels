@@ -17,7 +17,7 @@ include(joinpath(abs_project_path, "src", "utils", "mixed_models_data_generation
 
 n_individuals = 100
 
-p = 200
+p = 100
 prop_non_zero = 0.1
 p1 = Int(p * prop_non_zero)
 p0 = p - p1
@@ -87,6 +87,9 @@ partial_log_joint(Float32.(randn(params_dict["tot_params"])))
 # VI distribution
 vi_dist(z::AbstractArray) = VariationalDistributions.meanfield(z, tot_params=params_dict["tot_params"])
 
+# LR
+scatter(cyclical_polynomial_decay(num_iter, 4))
+
 # Training
 res = training_loop(;
     log_joint=partial_log_joint,
@@ -94,10 +97,14 @@ res = training_loop(;
     z_dim=params_dict["tot_params"]*2,
     n_iter=num_iter,
     n_chains=n_chains,
-    samples_per_step=4
+    samples_per_step=2,
+    sd_init=0.5f0,
+    use_noisy_grads=true,
+    n_cycles=4
 )
 
 plot(res["elbo_trace"][100:end, :])
+plot(res["elbo_trace"][500:end, :])
 
 vi_posterior = average_posterior(
     res["posteriors"],
@@ -139,10 +146,26 @@ boxplot!(metrics.tpr_distribution, label="TPR")
 plt = fdr_n_hist(metrics)
 
 # range
-boxplot(metrics.fdr_range, label="FDR")
-boxplot!(metrics.tpr_range, label="TPR")
-
 metrics.metrics_mean
 metrics.metrics_median
+scatter(sort(unique(metrics.n_inclusion_per_mc)), metrics.fdr_range)
+scatter!(sort(unique(metrics.n_inclusion_per_mc)), metrics.tpr_range)
+
 
 plt = scatter_sel_matrix(metrics.inclusion_matrix, p0=p0)
+
+
+# LASSO
+using GLMNet
+
+y_q = []
+for yi in data_dict["y"]
+    if yi == 1
+        push!(y_q, "yes")
+    else
+        push!(y_q, "no")
+    end
+end
+
+lasso_cv = glmnetcv(data_dict["X"], y_q)
+lasso_cv.path
