@@ -4,6 +4,7 @@ using StatsPlots
 using Random
 using LinearAlgebra
 using Turing
+using StatsFuns
 
 abs_project_path = normpath(joinpath(@__FILE__, "..", "..", ".."))
 include(joinpath(abs_project_path, "src", "utils", "mirror_statistic.jl"))
@@ -38,7 +39,7 @@ posterior_mean_active = vcat(randn(p1 - fn) * 0.05 .+ 1., randn(fn) * 0.1)
 
 posterior_mean = vcat(posterior_mean_null, posterior_mean_active)
 
-posterior_std_null = abs.(randn(p0) * 0.01) .+ 0.1
+posterior_std_null = abs.(randn(p0) * 0.05) .+ 0.1
 posterior_std_active = abs.(randn(p1) * 0.05) .+ 0.1
 posterior_std = vcat(posterior_std_null, posterior_std_active)
 
@@ -122,37 +123,6 @@ savefig(plt, joinpath(abs_project_path, "results", "ms_analysis", "$(label_files
 
 sum(mean_inclusion_per_coef .> 0.5)
 
-# Weighting by the average_inclusion_number
-weighted_sorted_inclusion = mean(inclusion_matrix ./ sum(inclusion_matrix, dims=1), dims=2)[:,1]
-scatter(weighted_sorted_inclusion[1:p0], mean_inclusion_per_coef[1:p0])
-
-sort_indices_by_incl_prob = sortperm(mean_inclusion_per_coef, rev=true)
-weighted_sorted_inclusion = sort(mean_inclusion_per_coef, rev=false) ./ average_inclusion_number
-cumsum_weighted_inclusion = cumsum(weighted_sorted_inclusion)
-plot(cumsum_weighted_inclusion)
-
-cutoff = 0
-for jj = 1:p
-    if cumsum_weighted_inclusion[jj] > fdr_target
-        cutoff = jj - 1
-        break
-    end
-end
-
-cumsum_weighted_inclusion[901]
-cumsum_weighted_inclusion[900]
-cumsum_weighted_inclusion[890]
-cumsum_weighted_inclusion[891]
-
-average_inclusion_number * (1-fdr_target)
-
-
-scatter(n_inclusion_per_mc, label=false)
-histogram(n_inclusion_per_mc, label=false)
-mean(n_inclusion_per_mc)
-std(n_inclusion_per_mc)
-
-
 
 # cutoff at the average
 sort_indices = sortperm(n_inclusion_per_coef, rev=true)
@@ -205,14 +175,18 @@ mean((fdr .- fdr_target).^2)
 # cumulative inclusion
 dimension_subsets = sum(inclusion_matrix, dims=1)
 relative_inclusion_freq = mean(inclusion_matrix ./ dimension_subsets, dims=2)[:, 1]
+relative_inclusion_freq = mean(inclusion_matrix, dims=2)[:, 1]
 
-sort_relative_inclusion_freq = sort(relative_inclusion_freq)
+sort_relative_inclusion_freq = sort(relative_inclusion_freq, rev=false)
 sort_cumsum = cumsum(sort_relative_inclusion_freq)
+plot(sort_cumsum)
+hline!([fdr_target])
+# * mean(dimension_subsets)
 
 cutoff = 0
-for jj = 1:p
-    if sort_cumsum[jj] > fdr_target
-        cutoff = jj - 1
+for jj = Int.(range(p, 1, length=p))
+    if sort_cumsum[jj] <= fdr_target
+        cutoff = jj
         break
     end
 end
@@ -223,28 +197,37 @@ scatter(relative_inclusion_freq, markersize=3, label="Sorted relative inclusion 
 hline!([min_inclusion_freq], label="Cutoff inclusion", linewidth=2)
 sum(relative_inclusion_freq .> min_inclusion_freq)
 
-excluded = relative_inclusion_freq .<= min_inclusion_freq
-included = relative_inclusion_freq .> min_inclusion_freq
+excluded = relative_inclusion_freq .< min_inclusion_freq
+included = relative_inclusion_freq .>= min_inclusion_freq
 
 plt = scatter(range_p[excluded], relative_inclusion_freq[excluded], label="Out")
 scatter!(range_p[included], relative_inclusion_freq[included], label="In")
 vspan!(plt, [p0 + 1, p], color = :green, alpha = 0.2, labels = "true active coefficients")
 
-selection = relative_inclusion_freq .> min_inclusion_freq
+selection = relative_inclusion_freq .>= min_inclusion_freq
 metrics_relative = classification_metrics.wrapper_metrics(
     true_coef .!= 0.,
     selection
 )
 
 
-scatter(mean_inclusion_per_coef, relative_inclusion_freq)
+# softmax
+softmax_inclusion_probs = StatsFuns.softmax(mean_inclusion_per_coef)
+scatter(softmax_inclusion_probs)
 
-sort_indices = sortperm(mean_inclusion_per_coef, rev=false)
-sum(mean_inclusion_per_coef[sort_indices[1:cutoff]])
-sum(mean_inclusion_per_coef[sort_indices[1:cutoff]]) / average_inclusion_number
+softmax_ordered = sort(softmax_inclusion_probs)
+softmax_cumsum = cumsum(softmax_ordered)
+scatter(softmax_cumsum)
 
-sort_indices = sortperm(relative_inclusion_freq, rev=false)
-sum(relative_inclusion_freq[sort_indices[1:cutoff]])
+cutoff = 0
+for jj = 1:p
+    if softmax_cumsum[jj] > fdr_target/p
+        cutoff = jj - 1
+        break
+    end
+end
+
+sum(softmax_inclusion_probs .< softmax_ordered[cutoff])
 
 
 # histograms
@@ -258,6 +241,7 @@ savefig(plt, joinpath(abs_project_path, "results", "ms_analysis", "$(label_files
 
 
 # -------------- MC loop -------------
+fdr_target = 0.1
 output = zeros(mc_samples)
 fdr = []
 tpr = []
@@ -291,6 +275,7 @@ mean(tpr)
 # cumulative inclusion
 dimension_subsets = sum(selection_matrix, dims=1)
 relative_inclusion_freq = mean(selection_matrix ./ dimension_subsets, dims=2)[:, 1]
+relative_inclusion_freq = mean(selection_matrix ./ mean(dimension_subsets), dims=2)[:, 1]
 
 sort_relative_inclusion_freq = sort(relative_inclusion_freq)
 sort_indices = sortperm(relative_inclusion_freq, rev=false)
@@ -324,7 +309,7 @@ plt = scatter(range_p[excluded], relative_inclusion_freq[excluded], label="Out")
 scatter!(range_p[included], relative_inclusion_freq[included], label="In")
 vspan!(plt, [p0 + 1, p], color = :green, alpha = 0.2, labels = "true active coefficients")
 
-selection = relative_inclusion_freq .>= sort_relative_inclusion_freq[cutoff]
+selection = relative_inclusion_freq .> sort_relative_inclusion_freq[cutoff]
 
 classification_metrics.wrapper_metrics(
     true_coef .> 0.,
@@ -344,6 +329,9 @@ savefig(plt, joinpath(abs_project_path, "results", "ms_analysis", "$(label_files
 
 
 mean_selection_matrix = mean(selection_matrix, dims=2)[:, 1]
+sum(mean_selection_matrix[mean_selection_matrix .> 0.5])
+mean(mean_selection_matrix[mean_selection_matrix .<= 0.5])
+
 plt = scatter(mean_selection_matrix, label=false)
 vspan!(plt, [p0 + 1, p], color = :green, alpha = 0.2, labels = "true active coefficients")
 xlabel!("Regression Coefficients", labelfontsize=15)
