@@ -457,3 +457,60 @@ density!(y, label="MS")
 density!(y1, label="+")
 density!(y2, label="-")
 
+
+# MDS
+fp = 11
+dimension_subsets = p1 + fp
+inclusion_probs = vcat(ones(p0 - fp) * 0.01, ones(fp) * 0.1, ones(p1) * 0.99)
+relative_inclusion_freq = inclusion_probs ./ dimension_subsets
+
+sum(relative_inclusion_freq[1:p0])
+sum(relative_inclusion_freq[p0+1:p])
+
+sum((inclusion_probs ./ fdr_target)[1:p0+1])
+sum((inclusion_probs ./ (1-fdr_target))[p0:p])
+
+sort_relative_inclusion_freq = sort(relative_inclusion_freq, rev=false)
+sort_cumsum = cumsum(sort_relative_inclusion_freq)
+plot(sort_cumsum)
+hline!([fdr_target])
+
+sum(sort_relative_inclusion_freq[1:p0])
+sum(sort_relative_inclusion_freq[1:p0-fp])
+sum(sort_relative_inclusion_freq[p0+1:p])
+sum(sort_relative_inclusion_freq[p0-fp:p])
+
+cutoff = 0
+for jj = 1:p
+    if sort_cumsum[jj] > fdr_target
+        cutoff = jj - 1
+        break
+    end
+end
+
+cutoff
+sort_cumsum[cutoff]
+sort_cumsum[cutoff+1]
+
+min_inclusion_freq = sort_relative_inclusion_freq[cutoff]
+
+sum(relative_inclusion_freq .>= min_inclusion_freq)
+
+plt = scatter(relative_inclusion_freq)
+hline!([min_inclusion_freq])
+vspan!(plt, [p0 + 1, p], color = :green, alpha = 0.2, labels = "true active coefficients")
+
+excluded = relative_inclusion_freq .< min_inclusion_freq
+included = relative_inclusion_freq .>= min_inclusion_freq
+range_p = collect(range(1, p))
+
+plt = scatter(range_p[excluded], relative_inclusion_freq[excluded], label="Out")
+scatter!(range_p[included], relative_inclusion_freq[included], label="In")
+vspan!(plt, [p0 + 1, p], color = :green, alpha = 0.2, labels = "true active coefficients")
+
+selection = relative_inclusion_freq .>= sort_relative_inclusion_freq[cutoff]
+
+classification_metrics.wrapper_metrics(
+    true_coef .> 0.,
+    selection .> 0
+)

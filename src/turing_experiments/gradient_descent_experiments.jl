@@ -37,10 +37,11 @@ contour(x1, x2, yf, fill=false, color=:turbo, levels=30)
 
 # NON convex
 n = 100
-x_range = 6
-x1 = collect(range(-x_range, x_range, length=n))
-x2 = collect(range(-x_range, x_range, length=n))
-f(x1, x2) = −sin(x1) + cos(2*x1) − sin(x2) + cos(2*x2)
+x_range = 3
+fx(xmin, xmax) = collect(range(xmin, xmax, length=n))
+x1 = fx(-x_range, x_range)
+x2 = fx(-x_range, x_range)
+f(x1, x2) = −sin(x1) + cos(5*x1) − sin(x2) + cos(2*x2)
 y = @. f(x1, x2)
 yf = @. f(x1', x2)
 contour(x1, x2, yf, fill=true, color=:turbo, levels=30)
@@ -50,22 +51,36 @@ scatter(x1, y)
 
 # choose optimiser
 optimizer = MyDecayedADAGrad()
-optimizer = Flux.Descent(0.1)
+optimizer = Flux.Descent()
 optimizer = Flux.RMSProp(0.01)
 
 # initial params (only 2 here)
-theta = [-1.5, -1.5]
+theta = [-2., -2.]
+theta_init = deepcopy(theta)
 
+n_iter = 1000
+n_iter_post = 100
+n_iter_tot = n_iter + n_iter_post
+
+theta_trace = zeros(n_iter_tot, 2)
 loss_trace = []
-n_iter = 400
-theta_trace = zeros(n_iter+1, 2)
-theta_trace[1, :] = theta
+min_loss = Inf64
+min_loss_theta = theta_init
 
 use_noisy_grads = true
-lr_schedule = cyclical_polynomial_decay(n_iter, 4)
-n2 = Int(n_iter / 2)
+n_cycles = 4
+n_per_cycle = Int(n_iter / n_cycles)
+sections = []
+for cycle = 1:n_cycles
+    push!(sections, collect(range(1, n_per_cycle)) .+ n_per_cycle * (cycle-1))
+end
+lr_schedule = cyclical_polynomial_decay(n_iter, n_cycles)
+plot(lr_schedule)
+final_section = collect(range(n_iter+1, n_iter_tot))
 
-for iter = 1:n_iter
+
+for iter = 1:n_iter_tot
+    
     # calculate gradient
     loss, grads = Zygote.withgradient(theta) do x
         f(x...)
@@ -80,22 +95,42 @@ for iter = 1:n_iter
     end
 
     # update params
-    if use_noisy_grads
-        grad_noise = randn(size(theta)) .* lr_schedule[iter]
+    if iter <= n_iter
+        if use_noisy_grads
+            grad_noise = randn(size(theta)) .* lr_schedule[iter]
+        else
+            grad_noise = 0f0
+        end
     else
         grad_noise = 0f0
     end
-    
+
     @. theta = theta - diff_grads + grad_noise
 
+    # store the minimum
+    if loss < min_loss
+        min_loss = loss
+        min_loss_theta = copy(theta)
+    end
+
+    # store trace
     push!(loss_trace, loss)
-    theta_trace[iter+1, :] = copy(theta)
+    theta_trace[iter, :] = copy(theta)
 end
 
-plt = contour(x1, x2, yf, fill=false, color=:turbo, levels=30)
-scatter!(theta_trace[1:n2, 1], theta_trace[1:n2, 2], label=false, markersize=3, color=2)
-scatter!(theta_trace[n2+1:n_iter, 1], theta_trace[n2+1:n_iter, 2], label=false, markersize=3, color=3)
+x1 = fx(minimum(theta_trace[:, 1]) .- 0.5, maximum(theta_trace[:, 1]) .+ 0.5)
+x2 = fx(minimum(theta_trace[:, 2]) .- 0.5, maximum(theta_trace[:, 2]) .+ 0.5)
+yf = @. f(x1', x2)
+plt = contour(
+    x1, x2, yf, fill=false, color=:turbo, levels=30
+)
+scatter!([theta_init[1]], [theta_init[2]], label="init")
+for cycle = 1:n_cycles
+    scatter!(theta_trace[sections[cycle], 1], theta_trace[sections[cycle], 2],
+    label=cycle, markersize=3, color=cycle)
+end
+scatter!(theta_trace[final_section, 1], theta_trace[final_section, 2],
+    label="final", markersize=3, color="black")
 display(plt)
 
-
-
+plot(loss_trace)
