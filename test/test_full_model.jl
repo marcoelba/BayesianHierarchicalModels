@@ -89,6 +89,7 @@ vi_dist(z::AbstractArray) = VariationalDistributions.meanfield(z, tot_params=par
 
 # LR
 scatter(cyclical_polynomial_decay(num_iter, 4))
+n_chains = 1
 
 # Training
 res = training_loop(;

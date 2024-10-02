@@ -26,12 +26,12 @@ prop_non_zero = 0.025
 p1 = Int(p * prop_non_zero)
 p0 = p - p1
 corr_factor = 0.5
-beta_time=Float32.([0, 2, 0, 0, 0])
+beta_time=Float32.([0, 2, 1, 0, 0])
 beta_pool=Float32.([-1., 1])
 
-n_chains = 2
-num_iter = 2000
-MC_SAMPLES=2000
+n_chains = 1
+num_iter = 4000
+MC_SAMPLES = 2000
 fdr_target = 0.1
 
 n_simulations = 10
@@ -151,7 +151,10 @@ for simu = 1:n_simulations
         z_dim=params_dict["tot_params"]*2,
         n_iter=num_iter,
         n_chains=n_chains,
-        samples_per_step=2
+        samples_per_step=2,
+        sd_init=0.5f0,
+        use_noisy_grads=true,
+        n_cycles=1
     )
 
     vi_posterior = average_posterior(
@@ -212,6 +215,10 @@ CSV.write(
     joinpath(abs_project_path, "results", "simulations", "$(label_files).csv"),
     df
 )
+# df = CSV.read(
+#     joinpath(abs_project_path, "results", "simulations", "$(label_files).csv"),
+#     DataFrame
+# )
 
 
 plt_tpr = boxplot(mean_tpr, label=false)
@@ -225,6 +232,10 @@ xticks!([1, 2], ["Mean", "Median"], tickfontsize=10)
 title!("FDR", titlefontsize=20)
 
 plt = plot(plt_fdr, plt_tpr)
+
+plt = boxplot(df[!, "mean_fdr"], label="Mean FDR")
+boxplot!(df[!, "mean_tpr"], label="Mean TPR")
+
 savefig(plt, joinpath(abs_project_path, "results", "simulations", "$(label_files)_fdrtpr_boxplot.pdf"))
 
 
@@ -320,8 +331,14 @@ res = training_loop(;
     z_dim=params_dict["tot_params"]*2,
     n_iter=num_iter,
     n_chains=n_chains,
-    samples_per_step=2
+    samples_per_step=2,
+    sd_init=0.5f0,
+    use_noisy_grads=true,
+    n_cycles=1
 )
+
+plot(res["elbo_trace"][2500:end])
+plot(res["elbo_trace"][500:end])
 
 vi_posterior = average_posterior(
     res["posteriors"],

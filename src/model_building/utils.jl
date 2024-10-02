@@ -116,7 +116,7 @@ function log_joint(theta; params_dict, theta_axes, model, log_likelihood, label)
 end
 
 
-function polynomial_decay(t::Int64; a::Float32=0.5f0, b::Float32=0.01f0, gamma::Float32=0.75f0)
+function polynomial_decay(t::Int64; a::Float32=1f0, b::Float32=0.01f0, gamma::Float32=0.75f0)
     a * (b + t)^(-gamma)
 end
 
@@ -142,7 +142,10 @@ function training_loop(;
     n_cycles::Int64=2
     )
 
-    elbo_trace = zeros(n_iter, n_chains)
+    steps_per_cycle = Int(n_iter / n_cycles)
+    n_iter_tot = n_iter + steps_per_cycle
+
+    elbo_trace = zeros(n_iter_tot, n_chains)
 
     posteriors = Dict()
 
@@ -155,19 +158,19 @@ function training_loop(;
         # Optimizer
         optimizer = MyDecayedADAGrad()
         # VI algorithm
-        alg = AdvancedVI.ADVI(samples_per_step, n_iter, adtype=ADTypes.AutoZygote())
+        alg = AdvancedVI.ADVI(samples_per_step, n_iter_tot, adtype=ADTypes.AutoZygote())
 
         # --- Train loop ---
         converged = false
         step = 1
 
-        prog = ProgressMeter.Progress(n_iter, 1)
+        prog = ProgressMeter.Progress(n_iter_tot, 1)
         z = Float32.(randn(z_dim)) * sd_init
         diff_results = DiffResults.GradientResult(z)
 
         lr_schedule = cyclical_polynomial_decay(n_iter, n_cycles)
 
-        while (step ≤ n_iter) && !converged
+        while (step ≤ n_iter_tot) && !converged
             
             AdvancedVI.grad!(
                 variational_objective,
@@ -186,8 +189,12 @@ function training_loop(;
             diff_grad = apply!(optimizer, z, gradient_step)
 
             # 4. Update parameters
-            if use_noisy_grads
-                grad_noise = Float32.(randn(z_dim)) .* lr_schedule[step]
+            if step <= n_iter
+                if use_noisy_grads
+                    grad_noise = Float32.(randn(z_dim)) .* lr_schedule[step]
+                else
+                    grad_noise = 0f0
+                end
             else
                 grad_noise = 0f0
             end
