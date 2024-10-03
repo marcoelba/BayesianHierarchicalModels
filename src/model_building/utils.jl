@@ -90,7 +90,7 @@ function log_joint(theta; params_dict, theta_axes, model, log_likelihood, label)
     bijectors = params_dict["bijectors"]
     ranges = params_dict["ranges"]
 
-    theta_transformed = vcat([bijectors[pp].(theta[ranges[pp]]) for pp in eachindex(bijectors)]...)
+    theta_transformed = vcat([bijectors[pp](theta[ranges[pp]]) for pp in eachindex(bijectors)]...)
 
     # parameters extraction
     theta_components = ComponentArray(theta_transformed, theta_axes)

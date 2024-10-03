@@ -46,4 +46,43 @@ function log_bernoulli_from_logit(x::Real, logitp::Real)
     x == 0 ? -log1pexp(logitp) : (x == 1 ? -log1pexp(-logitp) : oftype(float(logitp), -Inf))
 end
 
+"""
+Log-pdf of a mixture of Normal distributions.
+    x::Float32
+    w::AbstractArray{<:Float32}
+    mu::AbstractArray{<:Float32}
+    sd::AbstractArray{<:Float32}
+"""
+function log_normal_mixture(
+    x::Float32,
+    w::AbstractArray{<:Float32},
+    mu::AbstractArray{<:Float32},
+    sd::AbstractArray{<:Float32}
+    )
+    xstd = -0.5f0 .* ((x .- mu) ./ sd).^2f0
+    wstd = w ./ (sqrt(2f0 .* Float32(pi)) .* sd)
+    offset = maximum(xstd .* wstd, dims=2)
+    xe = exp.(xstd .- offset)
+    s = sum(xe .* wstd, dims=2)
+    sum(log.(s) .+ offset)
+end
+
+"""
+Log-pdf of a mixture of Normal distributions.
+    x::AbstractArray{<:Float32}
+    w::AbstractArray{<:Float32}
+    mu::AbstractArray{<:Float32}
+    sd::AbstractArray{<:Float32}
+"""
+function log_normal_mixture(
+    x::AbstractArray{<:Float32},
+    w::AbstractArray{<:Float32},
+    mu::AbstractArray{<:Float32},
+    sd::AbstractArray{<:Float32}
+    )
+    f(x_array) = log_normal_mixture(x_array, w, mu, sd)
+    # log_normal_mixture.(x, Ref(w), Ref(mu), Ref(sd))
+    f(x)
+end
+
 end
