@@ -16,7 +16,7 @@ include(joinpath(abs_project_path, "src", "utils", "decayed_ada_grad.jl"))
 function update_parameters_dict(
     params_dict::OrderedDict;
     name::String,
-    size::Int64,
+    size::Tuple,
     log_prob_fun,
     bij=Base.identity,
     dependency=[]
@@ -41,15 +41,15 @@ function update_parameters_dict(
     end
 
     if !(parameter_already_included)
-        range = (params_dict["tot_params"] + 1):(params_dict["tot_params"] + size)
-        params_dict["tot_params"] = params_dict["tot_params"] + size
+        range = (params_dict["tot_params"] + 1):(params_dict["tot_params"] + prod(size))
+        params_dict["tot_params"] = params_dict["tot_params"] + prod(size)
     else
         range = params_dict["priors"][name]["range"]
         params_dict["tot_params"] = params_dict["tot_params"]
     end
 
     new_prior = OrderedDict(
-        "size" => (size),
+        "size" => size,
         "bij" => bij,
         "range" => range,
         "log_prob" => log_prob_fun,
@@ -71,13 +71,33 @@ function get_parameters_axes(params_dict)
     
         # Get params axes
         theta_components = tuple(Symbol.(params_dict["priors"].keys)...)
-        proto_array = ComponentArray(;
-            [Symbol(pp) => ifelse(params_dict["priors"][pp]["size"] > 1, ones(params_dict["priors"][pp]["size"]), ones(params_dict["priors"][pp]["size"])[1])  for pp in params_dict["priors"].keys]...
-        )
+
+        # proto_array = ComponentArray(;
+        #     [Symbol(pp) => ifelse(
+        #         prod(params_dict["priors"][pp]["size"]) > 1,
+        #         ones(params_dict["priors"][pp]["size"]), 
+        #         ones(params_dict["priors"][pp]["size"])[1]
+        #     )  for pp in params_dict["priors"].keys]...
+        # )
+
+        vector_init = []
+        theta = []
+        for pp in params_dict["priors"].keys
+
+            if prod(params_dict["priors"][pp]["size"]) > 1
+                param_init = params_dict["priors"][pp]["bij"](ones(params_dict["priors"][pp]["size"]))
+            else
+                param_init = params_dict["priors"][pp]["bij"](ones(params_dict["priors"][pp]["size"])[1])
+            end
+            push!(vector_init, Symbol(pp) => param_init)
+            push!(theta, param_init...)
+        end
+
+        proto_array = ComponentArray(; vector_init...)
         theta_axes = getaxes(proto_array)
-        theta = Float32.(randn(params_dict["tot_params"]))
+
         begin
-            theta_components = ComponentArray(theta, theta_axes)
+            theta_components = ComponentArray(Float32.(theta), theta_axes)
         end
 
         return theta_axes, theta_components
@@ -90,7 +110,9 @@ function log_joint(theta; params_dict, theta_axes, model, log_likelihood, label)
     bijectors = params_dict["bijectors"]
     ranges = params_dict["ranges"]
 
-    theta_transformed = vcat([bijectors[pp](theta[ranges[pp]]) for pp in eachindex(bijectors)]...)
+    theta_transformed = vcat(
+        [bijectors[pp](theta[ranges[pp]]) for pp in eachindex(bijectors)]...
+    )
 
     # parameters extraction
     theta_components = ComponentArray(theta_transformed, theta_axes)

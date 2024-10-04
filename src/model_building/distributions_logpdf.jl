@@ -55,15 +55,19 @@ Log-pdf of a mixture of Normal distributions.
 """
 function log_normal_mixture(
     x::Float32,
-    w::AbstractArray{<:Float32},
-    mu::AbstractArray{<:Float32},
-    sd::AbstractArray{<:Float32}
+    w::AbstractArray{<:Float32}=Float32.(ones(2)*0.5),
+    m::AbstractArray{<:Float32}=Float32.(zeros(2)),
+    s::AbstractArray{<:Float32}=Float32.(ones(2));
+    weights::AbstractArray{<:Float32}=w,
+    mu::AbstractArray{Float32}=m,
+    sigma::AbstractArray{Float32}=s
     )
-    xstd = -0.5f0 .* ((x .- mu) ./ sd).^2f0
-    wstd = w ./ (sqrt(2f0 .* Float32(pi)) .* sd)
-    offset = maximum(xstd .* wstd, dims=2)
+
+    xstd = -0.5f0 .* ((x .- mu) ./ sigma).^2f0
+    wstd = weights ./ (sqrt(2f0 .* Float32(pi)) .* sigma)
+    offset = maximum(xstd .* wstd, dims=1)
     xe = exp.(xstd .- offset)
-    s = sum(xe .* wstd, dims=2)
+    s = sum(xe .* wstd, dims=1)
     sum(log.(s) .+ offset)
 end
 
@@ -82,7 +86,29 @@ function log_normal_mixture(
     )
     f(x_array) = log_normal_mixture(x_array, w, mu, sd)
     # log_normal_mixture.(x, Ref(w), Ref(mu), Ref(sd))
-    f(x)
+    f.(x)
+end
+
+"""
+Log-likelihood of a mixture of Normal distributions (TEMP).
+    x::AbstractArray{<:Float32} (n x 1)
+    w::AbstractArray{<:Float32} (1 x n_clusters)
+    mu::AbstractArray{<:Float32} (n x n_clusters)
+    sd::AbstractArray{<:Float32} (n x n_clusters)
+"""
+function loglik_normal_mixture(
+    x::AbstractArray{<:Float32},
+    weights::AbstractArray{<:Float32},
+    mu::AbstractArray{<:Float32},
+    sigma::AbstractArray{<:Float32}
+    )
+
+    xstd = -0.5f0 .* ((x .- mu) ./ sigma).^2f0
+    wstd = weights ./ (sqrt(2f0 .* Float32(pi)) .* sigma)
+    offset = maximum(xstd .* wstd, dims=2)
+    xe = exp.(xstd .- offset)
+    s = sum(xe .* wstd, dims=2)
+    sum(log.(s) .+ offset)
 end
 
 end

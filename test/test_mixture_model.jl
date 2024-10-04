@@ -37,7 +37,6 @@ MC_SAMPLES=2000
 
 params_dict = OrderedDict()
 
-
 # Mixture prior distribution on random intercept
 n_clusters = 3
 
@@ -45,50 +44,78 @@ n_clusters = 3
 update_parameters_dict(
     params_dict;
     name="cluster_probs",
-    size=(n_clusters - 1),
+    size=(n_clusters - 1, ),
     bij=VectorizedBijectors.simplex,
     log_prob_fun=x::AbstractArray{<:Float32} -> Distributions.logpdf(
         Distributions.Dirichlet(n_clusters, 5f0), x
     )
 )
 
-# clusters mean
-update_parameters_dict(
-    params_dict;
-    name="cluster_means",
-    size=n_clusters,
-    log_prob_fun=x::AbstractArray{<:Float32} -> DistributionsLogPdf.log_normal(x)
-)
+# # clusters mean
+# update_parameters_dict(
+#     params_dict;
+#     name="cluster_means",
+#     size=(n_clusters, ),
+#     log_prob_fun=x::AbstractArray{<:Float32} -> DistributionsLogPdf.log_normal(x)
+# )
 
-# sigma cluster
-update_parameters_dict(
-    params_dict;
-    name="cluster_sigma",
-    size=1,
-    bij=VectorizedBijectors.softplus,
-    log_prob_fun=x::Float32 -> DistributionsLogPdf.log_half_cauchy(x, sigma=3f0)
-)
+# # sigma cluster
+# update_parameters_dict(
+#     params_dict;
+#     name="cluster_sigma",
+#     size=(1, ),
+#     bij=VectorizedBijectors.softplus,
+#     log_prob_fun=x::Float32 -> DistributionsLogPdf.log_half_cauchy(x, sigma=3f0)
+# )
 
 # beta 0
+# update_parameters_dict(
+#     params_dict;
+#     name="beta0",
+#     size=(n_clusters, ),
+#     log_prob_fun=(
+#         x::AbstractArray{<:Float32},
+#         w::AbstractArray{<:Float32},
+#         mu::AbstractArray{<:Float32},
+#         sd::Float32) -> DistributionsLogPdf.log_normal_mixture(
+#         x, w, mu, Float32.(ones(size(mu))) .* sd
+#     ),
+#     dependency=["cluster_probs", "cluster_means", "cluster_sigma"]
+# )
+
 update_parameters_dict(
     params_dict;
     name="beta0",
-    size=1,
-    log_prob_fun=(
-        x::AbstractArray{<:Float32},
-        w::AbstractArray{<:Float32},
-        mu::AbstractArray{<:Float32},
-        sd::AbstractArray{<:Float32}) -> DistributionsLogPdf.log_normal_mixture(
-        x, w, mu, sd
-    ),
-    dependency=["cluster_probs", "cluster_means", "cluster_sigma"]
+    size=(n_clusters, ),
+    log_prob_fun=
+        x::AbstractArray{<:Float32} -> DistributionsLogPdf.log_normal(
+        x, Float32.(zeros(n_clusters)), Float32.(ones(n_clusters)) * 2f0
+    )
 )
+
+# try
+# theta_components # from utils
+# DistributionsLogPdf.log_normal_mixture(
+#     theta_components["beta0"],
+#     theta_components["cluster_probs"],
+#     theta_components["cluster_means"],
+#     Float32.(ones(n_clusters)) .* theta_components["cluster_sigma"]
+# )
+# logpdf.(
+#     Distributions.MixtureModel([
+#         Normal(theta_components["cluster_means"][1], theta_components["cluster_sigma"]),
+#         Normal(theta_components["cluster_means"][2], theta_components["cluster_sigma"]),
+#         Normal(theta_components["cluster_means"][3], theta_components["cluster_sigma"])
+#     ], theta_components["cluster_probs"]),
+#     theta_components["beta0"]
+# )
+
 
 # sigma y
 update_parameters_dict(
     params_dict;
     name="sigma_y",
-    size=1,
+    size=(1, ),
     bij=VectorizedBijectors.softplus,
     log_prob_fun=x::Float32 -> DistributionsLogPdf.log_half_cauchy(x, sigma=3f0)
 )
@@ -101,13 +128,13 @@ function mixture_predictor(
     theta_c::ComponentArray;
     X::AbstractArray
     )
-    n = size(X, 1)
 
-    mu = X * theta_c["beta0"]
-    sigma = Float32.(ones(n)) .* theta_c["sigma_y"]
+    mu = X * theta_c["beta0"]'
+    sigma = Float32.(ones(size(mu))) .* theta_c["sigma_y"]
 
-    return (mu, sigma)
+    return (theta_c["cluster_probs"]', mu, sigma)
 end
+
 
 model(theta_components) = mixture_predictor(
     theta_components;
@@ -116,7 +143,7 @@ model(theta_components) = mixture_predictor(
 
 model(get_parameters_axes(params_dict)[2])
 
-DistributionsLogPdf.log_normal(
+DistributionsLogPdf.loglik_normal_mixture(
     y,
     model(get_parameters_axes(params_dict)[2])...
 )
@@ -127,7 +154,7 @@ partial_log_joint(theta) = log_joint(
     params_dict=params_dict,
     theta_axes=theta_axes,
     model=model,
-    log_likelihood=DistributionsLogPdf.log_normal,
+    log_likelihood=DistributionsLogPdf.loglik_normal_mixture,
     label=y
 )
 partial_log_joint(Float32.(randn(params_dict["tot_params"])))
