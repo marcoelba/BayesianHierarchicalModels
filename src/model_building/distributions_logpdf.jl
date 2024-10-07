@@ -55,9 +55,9 @@ Log-pdf of a mixture of Normal distributions.
 """
 function log_normal_mixture(
     x::Float32,
-    w::AbstractArray{<:Float32}=Float32.(ones(2)*0.5),
-    m::AbstractArray{<:Float32}=Float32.(zeros(2)),
-    s::AbstractArray{<:Float32}=Float32.(ones(2));
+    w::AbstractArray{<:Float32}=Float32.(ones(1, 2)*0.5),
+    m::AbstractArray{<:Float32}=Float32.(zeros(1, 2)),
+    s::AbstractArray{<:Float32}=Float32.(ones(1, 2));
     weights::AbstractArray{<:Float32}=w,
     mu::AbstractArray{Float32}=m,
     sigma::AbstractArray{Float32}=s
@@ -65,10 +65,10 @@ function log_normal_mixture(
 
     xstd = -0.5f0 .* ((x .- mu) ./ sigma).^2f0
     wstd = weights ./ (sqrt(2f0 .* Float32(pi)) .* sigma)
-    offset = maximum(xstd .* wstd, dims=1)
+    offset = maximum(xstd .* wstd, dims=2)
     xe = exp.(xstd .- offset)
-    s = sum(xe .* wstd, dims=1)
-    sum(log.(s) .+ offset)
+    s = sum(xe .* wstd, dims=2)
+    log.(s) .+ offset
 end
 
 """
@@ -108,7 +108,7 @@ function loglik_normal_mixture(
     offset = maximum(xstd .* wstd, dims=2)
     xe = exp.(xstd .- offset)
     s = sum(xe .* wstd, dims=2)
-    sum(log.(s) .+ offset)
+    log.(s) .+ offset
 end
 
 end

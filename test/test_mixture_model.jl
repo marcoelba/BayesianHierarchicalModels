@@ -38,55 +38,23 @@ MC_SAMPLES=2000
 params_dict = OrderedDict()
 
 # Mixture prior distribution on random intercept
-n_clusters = 3
+n_clusters = 5
 
 # mixing probabilities
 update_parameters_dict(
     params_dict;
     name="cluster_probs",
-    size=(n_clusters - 1, ),
+    dimension=(n_clusters - 1, ),
     bij=VectorizedBijectors.simplex,
     log_prob_fun=x::AbstractArray{<:Float32} -> Distributions.logpdf(
-        Distributions.Dirichlet(n_clusters, 5f0), x
+        Distributions.Dirichlet(n_clusters, 3f0), x
     )
 )
-
-# # clusters mean
-# update_parameters_dict(
-#     params_dict;
-#     name="cluster_means",
-#     size=(n_clusters, ),
-#     log_prob_fun=x::AbstractArray{<:Float32} -> DistributionsLogPdf.log_normal(x)
-# )
-
-# # sigma cluster
-# update_parameters_dict(
-#     params_dict;
-#     name="cluster_sigma",
-#     size=(1, ),
-#     bij=VectorizedBijectors.softplus,
-#     log_prob_fun=x::Float32 -> DistributionsLogPdf.log_half_cauchy(x, sigma=3f0)
-# )
-
-# beta 0
-# update_parameters_dict(
-#     params_dict;
-#     name="beta0",
-#     size=(n_clusters, ),
-#     log_prob_fun=(
-#         x::AbstractArray{<:Float32},
-#         w::AbstractArray{<:Float32},
-#         mu::AbstractArray{<:Float32},
-#         sd::Float32) -> DistributionsLogPdf.log_normal_mixture(
-#         x, w, mu, Float32.(ones(size(mu))) .* sd
-#     ),
-#     dependency=["cluster_probs", "cluster_means", "cluster_sigma"]
-# )
 
 update_parameters_dict(
     params_dict;
     name="beta0",
-    size=(n_clusters, ),
+    dimension=(n_clusters, ),
     log_prob_fun=
         x::AbstractArray{<:Float32} -> DistributionsLogPdf.log_normal(
         x, Float32.(zeros(n_clusters)), Float32.(ones(n_clusters)) * 2f0
@@ -115,7 +83,7 @@ update_parameters_dict(
 update_parameters_dict(
     params_dict;
     name="sigma_y",
-    size=(1, ),
+    dimension=(1, ),
     bij=VectorizedBijectors.softplus,
     log_prob_fun=x::Float32 -> DistributionsLogPdf.log_half_cauchy(x, sigma=3f0)
 )
@@ -195,9 +163,28 @@ beta_samples = extract_parameter(
 )
 plt = density(beta_samples', label=false)
 
+probs_samples = extract_parameter(
+    prior="cluster_probs",
+    params_dict=params_dict,
+    samples_posterior=samples_posterior
+)
+plt = density(probs_samples', label=false)
+
 sigma_samples = extract_parameter(
     prior="sigma_y",
     params_dict=params_dict,
     samples_posterior=samples_posterior
 )
 plt = density(sigma_samples', label=false)
+
+# posterior cluster inclusion probabilities
+ind = 150
+cluster_probs = posterior_cluster_prob(
+    y_i=y[ind],
+    x_i=X[ind, :],
+    samples_posterior=samples_posterior,
+    n_clusters=n_clusters,
+    model=mixture_predictor,
+    theta_axes=theta_axes
+)
+boxplot(cluster_probs')

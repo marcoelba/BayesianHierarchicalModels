@@ -16,7 +16,7 @@ include(joinpath(abs_project_path, "src", "utils", "decayed_ada_grad.jl"))
 function update_parameters_dict(
     params_dict::OrderedDict;
     name::String,
-    size::Tuple,
+    dimension::Tuple,
     log_prob_fun,
     bij=Base.identity,
     dependency=[]
@@ -36,22 +36,31 @@ function update_parameters_dict(
     # If first call
     if !("tot_params" in keys(params_dict))
         params_dict["tot_params"] = 0
+        params_dict["tot_params_t"] = 0
         params_dict["ranges"] = []
-        params_dict["bijectors"] = []    
+        params_dict["ranges_transformed"] = []
+        params_dict["bijectors"] = []
     end
 
     if !(parameter_already_included)
-        range = (params_dict["tot_params"] + 1):(params_dict["tot_params"] + prod(size))
-        params_dict["tot_params"] = params_dict["tot_params"] + prod(size)
+        # first time call
+        range = (params_dict["tot_params"] + 1):(params_dict["tot_params"] + prod(dimension))
+        params_dict["tot_params"] = params_dict["tot_params"] + prod(dimension)
+        # after bijector
+        prototype = bij(ones(prod(dimension)))
+        range_transformed = (params_dict["tot_params_t"] + 1):(params_dict["tot_params_t"] + prod(size(prototype)))
+        params_dict["tot_params_t"] = params_dict["tot_params_t"] + prod(size(prototype))
     else
         range = params_dict["priors"][name]["range"]
         params_dict["tot_params"] = params_dict["tot_params"]
+        range_transformed = params_dict["priors"][name]["range_transformed"]
     end
 
     new_prior = OrderedDict(
-        "size" => size,
+        "size" => dimension,
         "bij" => bij,
         "range" => range,
+        "range_transformed" => range_transformed,
         "log_prob" => log_prob_fun,
         "dependency" => dependency
     )
@@ -61,6 +70,7 @@ function update_parameters_dict(
     # Create a tuple for the ranges and the transformations
     if !(parameter_already_included)
         push!(params_dict["ranges"], params_dict["priors"][name]["range"])
+        push!(params_dict["ranges_transformed"], params_dict["priors"][name]["range_transformed"])
         push!(params_dict["bijectors"], params_dict["priors"][name]["bij"])
     end
     
@@ -71,14 +81,6 @@ function get_parameters_axes(params_dict)
     
         # Get params axes
         theta_components = tuple(Symbol.(params_dict["priors"].keys)...)
-
-        # proto_array = ComponentArray(;
-        #     [Symbol(pp) => ifelse(
-        #         prod(params_dict["priors"][pp]["size"]) > 1,
-        #         ones(params_dict["priors"][pp]["size"]), 
-        #         ones(params_dict["priors"][pp]["size"])[1]
-        #     )  for pp in params_dict["priors"].keys]...
-        # )
 
         vector_init = []
         theta = []
