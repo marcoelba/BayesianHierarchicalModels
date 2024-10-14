@@ -53,7 +53,7 @@ function get_t(mirror_coeffs; fdr_target)
             break
         end
     end
-    return optimal_t    
+    return optimal_t
 end
 
 function mirror_statistic(theta_1, theta_2)
@@ -208,6 +208,43 @@ function optimal_inclusion(;ms_dist_vec, mc_samples::Int64, beta_true, fdr_targe
         relative_inclusion_freq=relative_inclusion_freq,
         min_inclusion_freq=sort_relative_inclusion_freq[cutoff]
     )
+end
+
+
+"""
+    Newton method to control the FDR from posterior distribution
+"""
+function posterior_fdr_threshold(inclusion_probs, fdr_target=0.1)
+    fp_prob = 1. .- inclusion_probs
+    c_opt = 0.
+
+    for c in sort(fp_prob, rev=true)
+        lower_than_c = fp_prob .<= c
+        if (sum(fp_prob[lower_than_c]) / sum(lower_than_c)) < fdr_target
+            c_opt = c
+            break
+        end
+    end
+    return (c_opt=c_opt, selection=fp_prob .<= c_opt)
+end
+
+
+function posterior_ms_inclusion(;ms_dist_vec, mc_samples::Int64, beta_true, fdr_target::Real=0.1)
+
+    mirror_coefficients = rand(ms_dist_vec, mc_samples)
+    opt_t = get_t(mirror_coefficients; fdr_target=fdr_target)
+    inclusion_matrix = mirror_coefficients .> opt_t
+    inclusion_probs = mean(inclusion_matrix, dims=2)[:, 1]
+
+    c_opt, selection = posterior_fdr_threshold(inclusion_probs, fdr_target)
+
+    metrics = wrapper_metrics(
+        beta_true .!= 0.,
+        selection
+    )
+
+    return metrics
+
 end
 
 

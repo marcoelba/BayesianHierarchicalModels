@@ -44,8 +44,8 @@ n_clusters = 5
 update_parameters_dict(
     params_dict;
     name="cluster_probs",
-    dimension=(n_clusters - 1, ),
-    bij=VectorizedBijectors.simplex,
+    dimension=(n_clusters, ),
+    bij=StatsFuns.softmax,
     log_prob_fun=x::AbstractArray{<:Float32} -> Distributions.logpdf(
         Distributions.Dirichlet(n_clusters, 3f0), x
     )
@@ -109,7 +109,7 @@ model(theta_components) = mixture_predictor(
     X=X
 )
 
-model(get_parameters_axes(params_dict)[2])
+model(get_parameters_axes(params_dict)[2])[1]
 
 DistributionsLogPdf.loglik_normal_mixture(
     y,

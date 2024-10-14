@@ -62,3 +62,16 @@ logitp = [log(0.2/0.8), log(0.2/0.8)]
 x = [0, 1]
 log_bernoulli_from_logit.(x, logitp)
 log_bernoulli_from_logit(x, logitp)
+
+
+# Bayesian
+n = 100
+x = rand(Bernoulli(0.3), n)
+plt = density(rand(Beta(1. + sum(x), 1. + (n - sum(x))), 1000), label="Posterior n=100", trim=true, color="blue")
+vline!([sum(x)/n], label="MLE n=100", color="blue", linestyle=3, linewidth=2)
+n = 10
+x = rand(Bernoulli(0.3), n)
+density!(rand(Beta(1. + sum(x), 1. + (n - sum(x))), 1000), label="Posterior n=10", trim=true, color="green")
+vline!([sum(x)/n], label="MLE n=10", color="green", linestyle=3, linewidth=2)
+hline!([1.], label="Prior", color="red")
+savefig(plt, "/home/marco_ocbe/post.pdf")

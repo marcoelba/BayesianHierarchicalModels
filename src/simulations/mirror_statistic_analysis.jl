@@ -7,7 +7,7 @@ using Turing
 using StatsFuns
 
 abs_project_path = normpath(joinpath(@__FILE__, "..", "..", ".."))
-include(joinpath(abs_project_path, "src", "utils", "mirror_statistic.jl"))
+include(joinpath(abs_project_path, "src", "model_building", "mirror_statistic.jl"))
 include(joinpath(abs_project_path, "src", "utils", "classification_metrics.jl"))
 
 label_files = "ms_analysis_partial_identification"
@@ -30,12 +30,12 @@ true_coef = vcat(zeros(p0), ones(p1))
 
 fdr_target = 0.1
 fp = 0
-fn = 0
+fn = 30
 
 Random.seed!(35)
 
-posterior_mean_null = vcat(randn(p0 - fp) * 0.0, rand([-0.1, 0.1], fp))
-posterior_mean_active = vcat(randn(p1 - fn) * 0.05 .+ 1., randn(fn) * 0.1)
+posterior_mean_null = vcat(randn(p0 - fp) * 0.05, rand([-0.1, 0.1], fp))
+posterior_mean_active = vcat(randn(p1 - fn) * 0.05 .+ rand([-1., 1.], p1-fn), randn(fn) * 0.1)
 
 posterior_mean = vcat(posterior_mean_null, posterior_mean_active)
 
@@ -87,7 +87,10 @@ ms_dist_vec = arraydist([
 scatter(mean_vec)
 scatter(rand(ms_dist_vec))
 
-mc_samples = 2000
+scatter(mean_vec[1:p0])
+
+
+mc_samples = 1000
 # no MC loop
 mirror_coefficients = rand(ms_dist_vec, mc_samples)
 opt_t = 0
@@ -114,6 +117,7 @@ n_inclusion_per_coef = sum(inclusion_matrix, dims=2)[:,1]
 mean_inclusion_per_coef = mean(inclusion_matrix, dims=2)[:,1]
 scatter(n_inclusion_per_coef)
 
+
 plt = scatter(mean_inclusion_per_coef, label=false)
 xlabel!("Regression Coefficients", labelfontsize=15)
 ylabel!("Inclusion Probability", labelfontsize=15)
@@ -122,6 +126,15 @@ display(plt)
 savefig(plt, joinpath(abs_project_path, "results", "ms_analysis", "$(label_files)_mean_selection_matrix.pdf"))
 
 sum(mean_inclusion_per_coef .> 0.5)
+
+
+c_opt = MirrorStatistic.posterior_fdr_threshold(mean_inclusion_per_coef, 0.1)
+sum((1 .- mean_inclusion_per_coef) .<= c_opt)
+
+metrics = classification_metrics.wrapper_metrics(
+    true_coef .> 0.,
+    (1 .- mean_inclusion_per_coef) .<= c_opt
+)
 
 
 # cutoff at the average
@@ -209,25 +222,6 @@ metrics_relative = classification_metrics.wrapper_metrics(
     true_coef .!= 0.,
     selection
 )
-
-
-# softmax
-softmax_inclusion_probs = StatsFuns.softmax(mean_inclusion_per_coef)
-scatter(softmax_inclusion_probs)
-
-softmax_ordered = sort(softmax_inclusion_probs)
-softmax_cumsum = cumsum(softmax_ordered)
-scatter(softmax_cumsum)
-
-cutoff = 0
-for jj = 1:p
-    if softmax_cumsum[jj] > fdr_target/p
-        cutoff = jj - 1
-        break
-    end
-end
-
-sum(softmax_inclusion_probs .< softmax_ordered[cutoff])
 
 
 # histograms
@@ -404,6 +398,141 @@ end
 display(plt)
 vline!([mean(optimal_t)], label=false, linewidth=5)
 
+plt = histogram(optimal_t, normalize=true)
+for jj = 1:p
+    density!(mirror_coefficients[jj, :], label=false)
+end
+display(plt)
+
+plt = histogram(optimal_t, normalize=true)
+density!(mirror_coefficients[1, :], label=false)
+display(plt)
+
+plt = ecdfplot(Float64.(optimal_t), label="t", linewidth=3)
+for jj = p0+1:p
+    ecdfplot!(mirror_coefficients[jj, :], label=false)
+end
+display(plt)
+
+plt = ecdfplot(Float64.(optimal_t), label="t", linewidth=3)
+for jj = 1:100
+    ecdfplot!(mirror_coefficients[jj, :], label=false)
+end
+display(plt)
+
+
+
+# ----------------------------------------------------------
+# -------------- Full Monte Carlo approach -------------
+beta_1 = rand(posterior, mc_samples*2)
+beta_2 = rand(posterior, mc_samples*2)
+
+c_sum = beta_1 .+ beta_2
+c_diff = beta_1 .- beta_2
+
+abs_c_sum = abs.(c_sum)
+abs_c_diff = abs.(c_diff)
+cor(c_sum[1, :], c_diff[1, :])
+cor(c_sum[p, :], c_diff[p, :])
+cor(abs_c_sum[1, :], abs_c_diff[1, :])
+cor(abs_c_sum[p, :], abs_c_diff[p, :])
+
+scatter(mean(c_sum, dims=2))
+scatter(mean(c_diff, dims=2))
+
+scatter(mean(abs_c_diff, dims=2))
+
+mirror_coeffs = abs_c_sum .- abs_c_diff
+scatter(mirror_coeffs[1, :])
+scatter(mirror_coeffs[:, 1])
+
+density(mirror_coeffs[1, :])
+density!(rand(ms_dist_vec, mc_samples*2)[1, :])
+
+density(mirror_coeffs[p, :])
+density!(rand(ms_dist_vec, mc_samples*2)[p, :])
+
+# quantiles
+quantile(mirror_coeffs[1, :], [0.05, 0.95])
+quantile(mirror_coeffs[2, :], [0.05, 0.95])
+
+
+mirror_coeffs = rand(ms_dist_vec, mc_samples*2)
+
+
+# No loop
+opt_t = MirrorStatistic.get_t(mirror_coeffs; fdr_target=fdr_target)
+selection_matrix = (mirror_coeffs .> opt_t) * 1
+
+mean_selection_matrix = mean(selection_matrix, dims=2)[:,1]
+sum_selection_matrix = sum(selection_matrix, dims=1)
+relative_probs = mean(selection_matrix ./ sum_selection_matrix, dims=2)[:,1]
+
+histogram(sum_selection_matrix')
+mean(sum_selection_matrix')
+
+scatter(mean_selection_matrix)
+
+metrics = classification_metrics.wrapper_metrics(
+    true_coef .!= 0.,
+    mean_selection_matrix .> 0.5
+)
+
+fp_prob = 1 .- mean_selection_matrix
+
+function fdr_estimate(fp_prob, fdr_target=0.1)
+    c_opt = 0.
+    for c in sort(fp_prob, rev=true)
+        lower_than_c = fp_prob .<= c
+        if (sum(fp_prob[lower_than_c]) / sum(lower_than_c)) <= fdr_target
+            c_opt = c
+            break
+        end
+    end
+    return c_opt
+end
+
+sum(fp_prob .<= c_opt)
+classification_metrics.wrapper_metrics(
+    true_coef .!= 0.,
+    fp_prob .<= c_opt
+)
+
+# ------------------------------------------------------
+
+fdr_target = 0.1
+output = zeros(mc_samples)
+fdr = []
+tpr = []
+selection_matrix = zeros(p, mc_samples)
+optimal_t = []
+mirror_coefficients = zeros(p, mc_samples)
+
+for nn = 1:mc_samples
+    beta_1 = rand(posterior)
+    beta_2 = rand(posterior)
+
+    mirror_coeffs = abs.(beta_1 .+ beta_2) .- abs.(beta_1 .- beta_2)
+
+    opt_t = MirrorStatistic.get_t(mirror_coeffs; fdr_target=fdr_target)
+    mirror_coefficients[:, nn] = mirror_coeffs
+    push!(optimal_t, opt_t)
+    output[nn] = sum(mirror_coeffs .> opt_t)
+    selection_matrix[:, nn] = (mirror_coeffs .> opt_t) * 1
+
+    metrics = classification_metrics.wrapper_metrics(
+        true_coef .> 0.,
+        mirror_coeffs .> opt_t
+    )
+    push!(fdr, metrics.fdr)
+    push!(tpr, metrics.tpr)
+
+end
+
+mean(output)
+mean(fdr)
+mode(fdr)
+mean(tpr)
 
 
 # -----------------------------------------------------------

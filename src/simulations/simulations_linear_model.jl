@@ -13,6 +13,7 @@ include(joinpath(abs_project_path, "src", "model_building", "plot_utils.jl"))
 include(joinpath(abs_project_path, "src", "model_building", "posterior_utils.jl"))
 include(joinpath(abs_project_path, "src", "model_building", "model_prediction_functions.jl"))
 include(joinpath(abs_project_path, "src", "model_building", "distributions_logpdf.jl"))
+include(joinpath(abs_project_path, "src", "model_building", "vectorised_bijectors.jl"))
 include(joinpath(abs_project_path, "src", "model_building", "variational_distributions.jl"))
 include(joinpath(abs_project_path, "src", "model_building", "mirror_statistic.jl"))
 include(joinpath(abs_project_path, "src", "utils", "mixed_models_data_generation.jl"))
@@ -41,7 +42,7 @@ params_dict = OrderedDict()
 update_parameters_dict(
     params_dict;
     name="beta0",
-    size=1,
+    dimension=(1, ),
     log_prob_fun=x::Float32 -> DistributionsLogPdf.log_normal(x)
 )
 
@@ -49,14 +50,14 @@ update_parameters_dict(
 update_parameters_dict(
     params_dict;
     name="sigma_beta",
-    size=p,
-    bij=StatsFuns.softplus,
+    dimension=(p, ),
+    bij=VectorizedBijectors.softplus,
     log_prob_fun=x::AbstractArray{Float32} -> DistributionsLogPdf.log_half_cauchy(x, sigma=Float32.(ones(p)*1))
 )
 update_parameters_dict(
     params_dict;
     name="beta",
-    size=p,
+    dimension=(p, ),
     log_prob_fun=(x::AbstractArray{Float32}, sigma::AbstractArray{Float32}) -> DistributionsLogPdf.log_normal(x, sigma=sigma),
     dependency=["sigma_beta"]
 )
@@ -65,8 +66,8 @@ update_parameters_dict(
 update_parameters_dict(
     params_dict;
     name="sigma_y",
-    size=1,
-    bij=StatsFuns.softplus,
+    dimension=(1, ),
+    bij=VectorizedBijectors.softplus,
     log_prob_fun=x::Float32 -> Distributions.logpdf(
         truncated(Normal(0f0, 0.2f0), 0f0, Inf32),
         x
@@ -354,7 +355,22 @@ plt = scatter(range_p[excluded], metrics.relative_inclusion_freq[excluded], labe
 scatter!(range_p[included], metrics.relative_inclusion_freq[included], label="In")
 vspan!(plt, [p0 + 1, p], color = :green, alpha = 0.2, labels = "true active coefficients")
 
+# Posterior
+inclusion_probs = mean(metrics.inclusion_matrix, dims=2)[:, 1]
+c_opt, selection = MirrorStatistic.posterior_fdr_threshold(inclusion_probs, fdr_target)
+sum(selection)
 
+metrics = MirrorStatistic.wrapper_metrics(
+    data_dict["beta"] .!= 0.,
+    selection
+)
+
+MirrorStatistic.posterior_ms_inclusion(
+    ms_dist_vec=ms_dist,
+    mc_samples=MC_SAMPLES,
+    beta_true=data_dict["beta"],
+    fdr_target=0.1
+)
 
 
 metrics = MirrorStatistic.fdr_distribution(
