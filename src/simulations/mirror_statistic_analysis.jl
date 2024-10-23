@@ -30,7 +30,7 @@ true_coef = vcat(zeros(p0), ones(p1))
 
 fdr_target = 0.1
 fp = 0
-fn = 30
+fn = 20
 
 Random.seed!(35)
 
@@ -80,16 +80,96 @@ mean_vec = mean_folded_normal.(posterior_mean, posterior_std) .-
 var_vec = var_folded_normal.(posterior_mean, posterior_std) .+ 
     var_folded_normal.(0., posterior_std)
 
-ms_dist_vec = arraydist([
+ms_vec = [
     Normal(mean_ms, sqrt(var_ms)) for (mean_ms, var_ms) in zip(mean_vec, var_vec)
-])
+]
+ms_dist_vec = arraydist(ms_vec)
 
 scatter(mean_vec)
 scatter(rand(ms_dist_vec))
 
-scatter(mean_vec[1:p0])
+#
+t = 0.28
+
+probs_t = []
+for j_dist in ms_vec
+    push!(probs_t, 1 - cdf(j_dist, t))
+end
+scatter(probs_t)
 
 
+ms_samples = rand(ms_dist_vec, 100)
+ms_samples = rand(ms_dist_vec)
+Dp = ms_samples .> t
+Dm = ms_samples .< -t
+sum(Dm)
+
+Dp = mean(Dp, dims=2)[:, 1]
+
+# d(t)(w > t) * (1 - r)
+fp_est = sum(Dp .* (1 .- probs_t))
+tot_d = sum(Dp)
+fdp = fp_est / tot_d
+
+
+function fdp_estimate(ms_samples, t)
+    probs_t = []
+    for j_dist in ms_vec
+        push!(probs_t, 1 - cdf(j_dist, t))
+    end
+    
+    Dp = ms_samples .> t
+    
+    # d(t)(w > t) * (1 - r)
+    fp_est = sum(Dp .* (1 .- probs_t))
+    tot_d = sum(Dp)
+    fdp = fp_est / tot_d
+    
+    return fdp
+end
+
+function mc_fdp_estimate(ms_samples, t)
+    fdr_MC_t = []
+    for m in eachcol(ms_samples)
+        push!(fdr_MC_t, fdp_estimate(m, t))
+    end
+    return fdr_MC_t
+end
+
+ms_samples = rand(ms_dist_vec, 1)
+fdr_MC_t = mc_fdp_estimate(ms_samples, t)
+mean(fdr_MC_t)
+histogram(fdr_MC_t)
+
+fdr = []
+for t in range(minimum(abs.(ms_samples)), maximum(abs.(ms_samples)), length=100)
+    push!(fdr, mean(mc_fdp_estimate(ms_samples, t)))
+end
+scatter(fdr)
+
+opt_t = 0
+for t in range(minimum(abs.(ms_samples)), maximum(abs.(ms_samples)), length=100)
+    if mean(mc_fdp_estimate(ms_samples, t)) < 0.1
+        opt_t = t
+        break
+    end
+end
+
+sum(ms_samples .> opt_t)
+probs_t = []
+for j_dist in ms_vec
+    push!(probs_t, 1 - cdf(j_dist, opt_t))
+end
+scatter(probs_t)
+
+metrics = classification_metrics.wrapper_metrics(
+    true_coef .> 0.,
+    ms_samples[:, 1] .> opt_t
+)
+
+
+# -------------------------------------
+# Using the FDR criterion from MS
 mc_samples = 1000
 # no MC loop
 mirror_coefficients = rand(ms_dist_vec, mc_samples)
@@ -127,13 +207,15 @@ savefig(plt, joinpath(abs_project_path, "results", "ms_analysis", "$(label_files
 
 sum(mean_inclusion_per_coef .> 0.5)
 
+sum(mean_inclusion_per_coef .* (mean_inclusion_per_coef .> 0.9)) / sum(mean_inclusion_per_coef .> 0.5)
 
-c_opt = MirrorStatistic.posterior_fdr_threshold(mean_inclusion_per_coef, 0.1)
+
+c_opt, selection = MirrorStatistic.posterior_fdr_threshold(mean_inclusion_per_coef, fdr_target)
 sum((1 .- mean_inclusion_per_coef) .<= c_opt)
 
 metrics = classification_metrics.wrapper_metrics(
     true_coef .> 0.,
-    (1 .- mean_inclusion_per_coef) .<= c_opt
+    selection
 )
 
 

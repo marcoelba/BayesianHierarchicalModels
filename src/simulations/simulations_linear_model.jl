@@ -22,7 +22,7 @@ include(joinpath(abs_project_path, "src", "utils", "mixed_models_data_generation
 n_individuals = 200
 
 p = 1000
-prop_non_zero = 0.05
+prop_non_zero = 0.025
 p1 = Int(p * prop_non_zero)
 p0 = p - p1
 corr_factor = 0.5
@@ -129,7 +129,7 @@ for simu = 1:n_simulations
         prior="beta",
         params_dict=params_dict
     )
-    
+
     metrics = MirrorStatistic.optimal_inclusion(
         ms_dist_vec=ms_dist,
         mc_samples=MC_SAMPLES,
@@ -138,12 +138,21 @@ for simu = 1:n_simulations
     )
     metrics_dict = Dict()
 
+    # Posterior
+    inclusion_probs = mean(metrics.inclusion_matrix, dims=2)[:, 1]
+    c_opt, selection = MirrorStatistic.posterior_fdr_threshold(inclusion_probs, fdr_target)
+
+    metrics_posterior = MirrorStatistic.wrapper_metrics(
+        data_dict["beta"] .!= 0.,
+        selection
+    )
+
     metrics_dict["fdr_range"] = metrics.fdr_range
     metrics_dict["tpr_range"] = metrics.tpr_range
     
     metrics_dict["metrics_mean"] = metrics.metrics_mean
     metrics_dict["metrics_median"] = metrics.metrics_median
-    metrics_dict["metrics_relative"] = metrics.metrics_relative
+    metrics_dict["metrics_posterior"] = metrics_posterior
 
     simulations_metrics[simu] = metrics_dict
 
@@ -152,28 +161,23 @@ end
 
 label_files = "algo_HS_linear_n$(n_individuals)_p$(p)_active$(p1)_r$(Int(corr_factor*100))"
 
-median_fdr = []
-median_tpr = []
-relative_fdr = []
 
 mean_fdr = []
 mean_tpr = []
-relative_tpr = []
+posterior_fdr = []
+posterior_tpr = []
 
 for simu = 1:n_simulations
-    push!(median_fdr, simulations_metrics[simu]["metrics_median"].fdr)
-    push!(median_tpr, simulations_metrics[simu]["metrics_median"].tpr)
-
     push!(mean_fdr, simulations_metrics[simu]["metrics_mean"].fdr)
     push!(mean_tpr, simulations_metrics[simu]["metrics_mean"].tpr)
 
-    push!(relative_fdr, simulations_metrics[simu]["metrics_relative"].fdr)
-    push!(relative_tpr, simulations_metrics[simu]["metrics_relative"].tpr)
+    push!(posterior_fdr, simulations_metrics[simu]["metrics_posterior"].fdr)
+    push!(posterior_tpr, simulations_metrics[simu]["metrics_posterior"].tpr)
 
 end
 
-all_metrics = hcat(mean_fdr, median_fdr, mean_tpr, median_tpr)
-df = DataFrame(all_metrics, ["mean_fdr", "median_fdr", "mean_tpr", "median_tpr"])
+all_metrics = hcat(mean_fdr, posterior_fdr, mean_tpr, posterior_tpr)
+df = DataFrame(all_metrics, ["mean_fdr", "posterior_fdr", "mean_tpr", "posterior_tpr"])
 
 CSV.write(
     joinpath(abs_project_path, "results", "simulations", "$(label_files).csv"),
@@ -182,18 +186,22 @@ CSV.write(
 
 
 plt_tpr = boxplot(mean_tpr, label=false)
-boxplot!(median_tpr, label=false)
-boxplot!(relative_tpr, label=false)
-xticks!([1, 2], ["Mean", "Median"], tickfontsize=10)
+boxplot!(posterior_tpr, label=false)
+xticks!([1, 2], ["Mean", "Posterior"], tickfontsize=10)
 title!("TPR", titlefontsize=20)
 
 plt_fdr = boxplot(mean_fdr, label=false)
-boxplot!(median_fdr, label=false)
-boxplot!(relative_fdr, label=false)
-xticks!([1, 2], ["Mean", "Median"], tickfontsize=10)
+boxplot!(posterior_fdr, label=false)
+xticks!([1, 2], ["Mean", "Posterior"], tickfontsize=10)
 title!("FDR", titlefontsize=20)
 
 plt = plot(plt_fdr, plt_tpr)
+
+plt = boxplot(posterior_fdr, label=false)
+boxplot!(posterior_tpr, label=false)
+xticks!([1, 2], ["FDR", "TPR"], tickfontsize=15)
+yticks!(range(0, 1, step=0.1))
+
 savefig(plt, joinpath(abs_project_path, "results", "simulations", "$(label_files)_fdrtpr_boxplot.pdf"))
 
 
@@ -285,10 +293,14 @@ res = training_loop(;
     log_joint=partial_log_joint,
     vi_dist=vi_dist,
     z_dim=params_dict["tot_params"]*2,
-    n_iter=num_iter,
-    n_chains=n_chains,
-    samples_per_step=2
+    n_iter=4000,
+    n_chains=1,
+    samples_per_step=2,
+    use_noisy_grads=true,
+    n_cycles=1
 )
+
+plot(res["elbo_trace"][num_iter:end])
 
 vi_posterior = average_posterior(
     res["posteriors"],

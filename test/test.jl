@@ -75,3 +75,29 @@ density!(rand(Beta(1. + sum(x), 1. + (n - sum(x))), 1000), label="Posterior n=10
 vline!([sum(x)/n], label="MLE n=10", color="green", linestyle=3, linewidth=2)
 hline!([1.], label="Prior", color="red")
 savefig(plt, "/home/marco_ocbe/post.pdf")
+
+
+#
+using GLM
+using Distributions
+using DataFrames
+using StatsPlots
+
+x = Uniform(0, 1)
+pdf(x, 0.4)
+cdf(x, 0.4)
+
+n = 1000
+m = 100
+beta_true = vcat(ones(50), zeros(50))
+
+X_dist = Normal(0, 1)
+X = rand(X_dist, (n, m))
+
+f(X) = X * beta_true .+ randn(n)*0.5
+y = f(X)
+
+res = GLM.lm(X, y)
+p_values = DataFrame(GLM.coeftable(res))[:, "Pr(>|t|)"]
+histogram(p_values[51:m], bins=5, normalize=true)
+

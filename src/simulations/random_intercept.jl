@@ -16,6 +16,7 @@ include(joinpath(abs_project_path, "src", "model_building", "distributions_logpd
 include(joinpath(abs_project_path, "src", "model_building", "variational_distributions.jl"))
 include(joinpath(abs_project_path, "src", "model_building", "mirror_statistic.jl"))
 include(joinpath(abs_project_path, "src", "utils", "mixed_models_data_generation.jl"))
+include(joinpath(abs_project_path, "src", "model_building", "vectorised_bijectors.jl"))
 
 
 n_individuals = 200
@@ -45,14 +46,14 @@ params_dict = OrderedDict()
 update_parameters_dict(
     params_dict;
     name="beta0_fixed",
-    size=1,
+    dimension=(1,),
     log_prob_fun=x::Float32 -> DistributionsLogPdf.log_normal(x)
 )
 update_parameters_dict(
     params_dict;
     name="sigma_beta0",
-    size=n_individuals,
-    bij=StatsFuns.softplus,
+    dimension=(n_individuals,),
+    bij=VectorizedBijectors.softplus,
     log_prob_fun=x::AbstractArray{Float32} -> DistributionsLogPdf.log_half_cauchy(
         x, sigma=Float32.(ones(n_individuals) * 0.1)
     )
@@ -60,7 +61,7 @@ update_parameters_dict(
 update_parameters_dict(
     params_dict;
     name="beta0_random",
-    size=n_individuals,
+    dimension=(n_individuals,),
     log_prob_fun=(x::AbstractArray{Float32}, sigma::AbstractArray{Float32}) -> DistributionsLogPdf.log_normal(
         x, sigma=sigma
     ),
@@ -71,14 +72,14 @@ update_parameters_dict(
 update_parameters_dict(
     params_dict;
     name="sigma_beta",
-    size=p,
-    bij=StatsFuns.softplus,
+    dimension=(p,),
+    bij=VectorizedBijectors.softplus,
     log_prob_fun=x::AbstractArray{Float32} -> DistributionsLogPdf.log_half_cauchy(x, sigma=Float32.(ones(p)*1))
 )
 update_parameters_dict(
     params_dict;
     name="beta_fixed",
-    size=p,
+    dimension=(p,),
     log_prob_fun=(x::AbstractArray{Float32}, sigma::AbstractArray{Float32}) -> DistributionsLogPdf.log_normal(x, sigma=sigma),
     dependency=["sigma_beta"]
 )
@@ -87,14 +88,14 @@ update_parameters_dict(
 update_parameters_dict(
     params_dict;
     name="sigma_beta_time",
-    size=1,
-    bij=StatsFuns.softplus,
+    dimension=(1,),
+    bij=VectorizedBijectors.softplus,
     log_prob_fun=x::Float32 -> DistributionsLogPdf.log_half_cauchy(x, sigma=1f0)
 )
 update_parameters_dict(
     params_dict;
     name="beta_time",
-    size=n_time_points,
+    dimension=(n_time_points,),
     log_prob_fun=(x::AbstractArray{Float32}, sigma::Float32) -> DistributionsLogPdf.log_normal(x, sigma=Float32.(ones(n_time_points)).*sigma),
     dependency=["sigma_beta_time"]
 )
@@ -103,8 +104,8 @@ update_parameters_dict(
 update_parameters_dict(
     params_dict;
     name="sigma_y",
-    size=1,
-    bij=StatsFuns.softplus,
+    dimension=(1,),
+    bij=VectorizedBijectors.softplus,
     log_prob_fun=x::Float32 -> Distributions.logpdf(
         truncated(Normal(0f0, 0.5f0), 0f0, Inf32),
         x
@@ -333,7 +334,7 @@ res = training_loop(;
     n_chains=n_chains,
     samples_per_step=2,
     sd_init=0.5f0,
-    use_noisy_grads=true,
+    use_noisy_grads=false,
     n_cycles=1
 )
 
@@ -391,6 +392,24 @@ metrics = MirrorStatistic.optimal_inclusion(
     beta_true=data_dict["beta_fixed"],
     fdr_target=fdr_target
 )
+
+# Posterior
+inclusion_probs = mean(metrics.inclusion_matrix, dims=2)[:, 1]
+inclusion_probs
+c_opt, selection = MirrorStatistic.posterior_fdr_threshold(inclusion_probs, fdr_target / 0.9)
+sum(selection)
+
+MirrorStatistic.wrapper_metrics(
+    data_dict["beta_fixed"] .!= 0.,
+    selection
+)
+
+n = []
+for q in range(0, 1., length=100)
+    c_opt, selection = MirrorStatistic.posterior_fdr_threshold(inclusion_probs, q)
+    push!(n, sum(selection))
+end
+scatter(range(0, 1., length=100), n)
 
 # distribution
 boxplot(metrics.fdr_distribution, label="FDR")
