@@ -29,17 +29,17 @@ p = p0 + p1
 true_coef = vcat(zeros(p0), ones(p1))
 
 fdr_target = 0.1
-fp = 0
-fn = 20
+fp = 10
+fn = 0
 
 Random.seed!(35)
 
-posterior_mean_null = vcat(randn(p0 - fp) * 0.05, rand([-0.1, 0.1], fp))
-posterior_mean_active = vcat(randn(p1 - fn) * 0.05 .+ rand([-1., 1.], p1-fn), randn(fn) * 0.1)
+posterior_mean_null = vcat(randn(p0 - fp) * 0.05, rand([-0.2, 0.2], fp))
+posterior_mean_active = vcat(randn(p1 - fn) * 0.05 .+ rand([-2., 2.], p1-fn), randn(fn) * 0.1 .+ 0.5)
 
 posterior_mean = vcat(posterior_mean_null, posterior_mean_active)
 
-posterior_std_null = abs.(randn(p0) * 0.05) .+ 0.1
+posterior_std_null = vcat(abs.(randn(p0 - fp) * 0.05) .+ 0.1, abs.(rand([0.2], fp)))
 posterior_std_active = abs.(randn(p1) * 0.05) .+ 0.1
 posterior_std = vcat(posterior_std_null, posterior_std_active)
 
@@ -89,22 +89,33 @@ scatter(mean_vec)
 scatter(rand(ms_dist_vec))
 
 #
-t = 0.28
+t = 0.3
 
-probs_t = []
-for j_dist in ms_vec
-    push!(probs_t, 1 - cdf(j_dist, t))
+function get_probs_w(ms_vec, t)
+    probs_t = []
+    for j_dist in ms_vec
+        push!(probs_t, 1 - cdf(j_dist, t))
+    end
+    return probs_t        
 end
+probs_t = get_probs_w(ms_vec, t)
 scatter(probs_t)
 
+function get_fdp(probs_t, tau)
+    sum((1 .- probs_t) .* (probs_t .> tau)) / sum(probs_t .> tau)
+end
+get_fdp(probs_t, t)
 
-ms_samples = rand(ms_dist_vec, 100)
+function get_probs_fdp(ms_vec, x)
+    probs_t = get_probs_w(ms_vec, x[1])
+    get_fdp(probs_t, x[2])
+end
+
+
 ms_samples = rand(ms_dist_vec)
 Dp = ms_samples .> t
 Dm = ms_samples .< -t
 sum(Dm)
-
-Dp = mean(Dp, dims=2)[:, 1]
 
 # d(t)(w > t) * (1 - r)
 fp_est = sum(Dp .* (1 .- probs_t))
@@ -154,6 +165,7 @@ for t in range(minimum(abs.(ms_samples)), maximum(abs.(ms_samples)), length=100)
         break
     end
 end
+mean(mc_fdp_estimate(ms_samples, opt_t))
 
 sum(ms_samples .> opt_t)
 probs_t = []
@@ -170,6 +182,7 @@ metrics = classification_metrics.wrapper_metrics(
 
 # -------------------------------------
 # Using the FDR criterion from MS
+fdr_target = 0.1
 mc_samples = 1000
 # no MC loop
 mirror_coefficients = rand(ms_dist_vec, mc_samples)
@@ -195,7 +208,7 @@ average_inclusion_number = Int(round(mean(n_inclusion_per_mc)))
 
 n_inclusion_per_coef = sum(inclusion_matrix, dims=2)[:,1]
 mean_inclusion_per_coef = mean(inclusion_matrix, dims=2)[:,1]
-scatter(n_inclusion_per_coef)
+scatter(mean_inclusion_per_coef)
 
 
 plt = scatter(mean_inclusion_per_coef, label=false)
@@ -204,11 +217,6 @@ ylabel!("Inclusion Probability", labelfontsize=15)
 vspan!(plt, [p0+1, p], color = :green, alpha = 0.2, labels = "true active coefficients");
 display(plt)
 savefig(plt, joinpath(abs_project_path, "results", "ms_analysis", "$(label_files)_mean_selection_matrix.pdf"))
-
-sum(mean_inclusion_per_coef .> 0.5)
-
-sum(mean_inclusion_per_coef .* (mean_inclusion_per_coef .> 0.9)) / sum(mean_inclusion_per_coef .> 0.5)
-
 
 c_opt, selection = MirrorStatistic.posterior_fdr_threshold(mean_inclusion_per_coef, fdr_target)
 sum((1 .- mean_inclusion_per_coef) .<= c_opt)
