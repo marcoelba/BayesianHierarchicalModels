@@ -101,3 +101,21 @@ res = GLM.lm(X, y)
 p_values = DataFrame(GLM.coeftable(res))[:, "Pr(>|t|)"]
 histogram(p_values[51:m], bins=5, normalize=true)
 
+#
+X = Normal(-2, 0.2)
+x = rand(X, 2000)
+density(x)
+
+cdf(X, -1.8)
+sum(x .< -1.8) / length(x)
+
+abs_x = abs.(x)
+mean(abs_x)
+var(abs_x)
+
+density!(abs_x)
+sum(abs_x .> 1.8) / length(x)
+
+logit_x = logistic.(abs_x)
+density!(logit_x)
+sum(logit_x .> logistic(1.8)) / length(x)

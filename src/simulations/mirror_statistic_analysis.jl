@@ -29,17 +29,17 @@ p = p0 + p1
 true_coef = vcat(zeros(p0), ones(p1))
 
 fdr_target = 0.1
-fp = 10
+fp = 0
 fn = 0
 
 Random.seed!(35)
 
-posterior_mean_null = vcat(randn(p0 - fp) * 0.05, rand([-0.2, 0.2], fp))
+posterior_mean_null = vcat(randn(p0) * 0.05, rand([-0.2, 0.2], 0))
 posterior_mean_active = vcat(randn(p1 - fn) * 0.05 .+ rand([-2., 2.], p1-fn), randn(fn) * 0.1 .+ 0.5)
 
 posterior_mean = vcat(posterior_mean_null, posterior_mean_active)
 
-posterior_std_null = vcat(abs.(randn(p0 - fp) * 0.05) .+ 0.1, abs.(rand([0.2], fp)))
+posterior_std_null = vcat(abs.(randn(p0 - fp) * 0.05) .+ 0.1, abs.(rand([0.5], fp)))
 posterior_std_active = abs.(randn(p1) * 0.05) .+ 0.1
 posterior_std = vcat(posterior_std_null, posterior_std_active)
 
@@ -74,7 +74,7 @@ end
 display(plt)
 
 
-# MS Distribution
+# Distribution with MS transformation
 mean_vec = mean_folded_normal.(posterior_mean, posterior_std) .- 
     mean_folded_normal.(0., posterior_std)
 var_vec = var_folded_normal.(posterior_mean, posterior_std) .+ 
@@ -88,15 +88,28 @@ ms_dist_vec = arraydist(ms_vec)
 scatter(mean_vec)
 scatter(rand(ms_dist_vec))
 
+
+# Distribution with only ABS transformation
+mean_vec = mean_folded_normal.(posterior_mean, posterior_std)
+var_vec = var_folded_normal.(posterior_mean, posterior_std)
+
+ms_vec = [
+    truncated(Normal(mean_ms, sqrt(var_ms)), 0, Inf) for (mean_ms, var_ms) in zip(mean_vec, var_vec)
+]
+ms_dist_vec = arraydist(ms_vec)
+
+scatter(mean_vec)
+scatter(rand(ms_dist_vec))
+
+
 #
 t = 0.3
-
 function get_probs_w(ms_vec, t)
     probs_t = []
     for j_dist in ms_vec
         push!(probs_t, 1 - cdf(j_dist, t))
     end
-    return probs_t        
+    return probs_t
 end
 probs_t = get_probs_w(ms_vec, t)
 scatter(probs_t)
@@ -104,7 +117,9 @@ scatter(probs_t)
 function get_fdp(probs_t, tau)
     sum((1 .- probs_t) .* (probs_t .> tau)) / sum(probs_t .> tau)
 end
-get_fdp(probs_t, t)
+tau = 0.2
+get_fdp(probs_t, tau)
+
 
 function get_probs_fdp(ms_vec, x)
     probs_t = get_probs_w(ms_vec, x[1])
@@ -114,13 +129,17 @@ end
 
 ms_samples = rand(ms_dist_vec)
 Dp = ms_samples .> t
+sum(Dp)
 Dm = ms_samples .< -t
 sum(Dm)
+sum(Dm) / sum(Dp)
+sum(probs_t)
 
 # d(t)(w > t) * (1 - r)
 fp_est = sum(Dp .* (1 .- probs_t))
 tot_d = sum(Dp)
 fdp = fp_est / tot_d
+
 
 
 function fdp_estimate(ms_samples, t)
@@ -147,16 +166,37 @@ function mc_fdp_estimate(ms_samples, t)
     return fdr_MC_t
 end
 
+# Optim
+using Optim
+
+function f_optim(t)
+    # ms_samples = rand(ms_dist_vec)
+    ms_samples = mean_vec
+    abs(fdp_estimate(ms_samples, t[1]) - 0.1)
+end
+f_optim(1.)
+
+result = Optim.optimize(f_optim, [0.001])
+Optim.minimizer(result)
+Optim.minimum(result)
+
+
 ms_samples = rand(ms_dist_vec, 1)
+ms_samples = mean_vec
+t = 0.036
 fdr_MC_t = mc_fdp_estimate(ms_samples, t)
 mean(fdr_MC_t)
 histogram(fdr_MC_t)
+sum(ms_samples .> t)
+
 
 fdr = []
-for t in range(minimum(abs.(ms_samples)), maximum(abs.(ms_samples)), length=100)
+t_range = range(minimum(abs.(ms_samples)), maximum(abs.(ms_samples)), length=100)
+
+for t in t_range
     push!(fdr, mean(mc_fdp_estimate(ms_samples, t)))
 end
-scatter(fdr)
+scatter(t_range, fdr)
 
 opt_t = 0
 for t in range(minimum(abs.(ms_samples)), maximum(abs.(ms_samples)), length=100)
@@ -180,10 +220,10 @@ metrics = classification_metrics.wrapper_metrics(
 )
 
 
-# -------------------------------------
+# -----------------------------------------------------------
 # Using the FDR criterion from MS
 fdr_target = 0.1
-mc_samples = 1000
+mc_samples = 2000
 # no MC loop
 mirror_coefficients = rand(ms_dist_vec, mc_samples)
 opt_t = 0
@@ -225,6 +265,59 @@ metrics = classification_metrics.wrapper_metrics(
     true_coef .> 0.,
     selection
 )
+
+
+mean_inclusion_per_coef = vcat(rand(Uniform(0, 0.1), p0), rand(Uniform(0.8, 1), p1))
+mean_inclusion_per_coef = rand(p)
+
+c_opt, selection = MirrorStatistic.posterior_fdr_threshold(mean_inclusion_per_coef, fdr_target)
+sum((1 .- mean_inclusion_per_coef) .<= c_opt)
+
+null_probs = 1 .- mean_inclusion_per_coef
+scatter(null_probs .* ((1 .- mean_inclusion_per_coef) .<= c_opt), label=false)
+fdp = []
+fp = []
+s_dim = []
+t_range = range(0., 1., length=100)
+for c in t_range
+    delta_c = mean_inclusion_per_coef .> c
+    push!(s_dim, sum(delta_c))
+    push!(fp, sum(null_probs .* delta_c))
+    push!(fdp, (sum(null_probs .* delta_c) / sum(delta_c)))
+end
+scatter(t_range, fdp, label=false)
+hline!([0.1])
+
+scatter(t_range, s_dim, label=false)
+scatter!(t_range, fp, label=false)
+hline!([111])
+
+# Sensitivity of the last step
+# Uniform probs
+inclusion_probs = rand(p)
+null_probs = 1 .- inclusion_probs
+fdp = []
+for c in sort(inclusion_probs, rev=true)
+    push!(fdp, (sum(null_probs .* (null_probs .<= c)) / sum(null_probs .<= c)))
+end
+scatter(sort(inclusion_probs, rev=true), fdp)
+
+c_opt, selection = MirrorStatistic.posterior_fdr_threshold(inclusion_probs, fdr_target)
+sum((1 .- inclusion_probs) .<= c_opt)
+
+
+# Good separation probs
+inclusion_probs = vcat(rand(Uniform(0, 0.1), p0), rand(Uniform(0.8, 1), p1))
+scatter(inclusion_probs)
+null_probs = 1 .- inclusion_probs
+fdp = []
+for c in sort(inclusion_probs, rev=true)
+    push!(fdp, (sum(null_probs .* (null_probs .<= c)) / sum(null_probs .<= c)))
+end
+scatter(sort(inclusion_probs, rev=true), fdp)
+
+c_opt, selection = MirrorStatistic.posterior_fdr_threshold(inclusion_probs, fdr_target)
+sum((1 .- inclusion_probs) .<= c_opt)
 
 
 # cutoff at the average
@@ -326,7 +419,7 @@ savefig(plt, joinpath(abs_project_path, "results", "ms_analysis", "$(label_files
 
 # -------------- MC loop -------------
 fdr_target = 0.1
-output = zeros(mc_samples)
+output = []
 fdr = []
 tpr = []
 selection_matrix = zeros(p, mc_samples)
@@ -336,14 +429,14 @@ mirror_coefficients = zeros(p, mc_samples)
 for nn = 1:mc_samples
 
     mirror_coeffs = rand(ms_dist_vec)
-    opt_t = MirrorStatistic.get_t(mirror_coeffs; fdr_q=fdr_target)
+    opt_t = MirrorStatistic.get_t(mirror_coeffs; fdr_target=fdr_target)
     mirror_coefficients[:, nn] = mirror_coeffs
     push!(optimal_t, opt_t)
-    output[nn] = sum(mirror_coeffs .> opt_t)
+    push!(output, Int(sum(mirror_coeffs .> opt_t)))
     selection_matrix[:, nn] = (mirror_coeffs .> opt_t) * 1
 
     metrics = classification_metrics.wrapper_metrics(
-        true_coef .> 0.,
+        true_coef .!= 0.,
         mirror_coeffs .> opt_t
     )
     push!(fdr, metrics.fdr)
@@ -352,56 +445,16 @@ for nn = 1:mc_samples
 end
 
 mean(output)
+mode(output)
+
 mean(fdr)
 mode(fdr)
 mean(tpr)
 
-# cumulative inclusion
-dimension_subsets = sum(selection_matrix, dims=1)
-relative_inclusion_freq = mean(selection_matrix ./ dimension_subsets, dims=2)[:, 1]
-relative_inclusion_freq = mean(selection_matrix ./ mean(dimension_subsets), dims=2)[:, 1]
-
-sort_relative_inclusion_freq = sort(relative_inclusion_freq)
-sort_indices = sortperm(relative_inclusion_freq, rev=false)
-sort_cumsum = cumsum(sort_relative_inclusion_freq)
-
-cutoff = 0
-for jj = 1:p
-    if sort_cumsum[jj] > fdr_target
-        cutoff = jj - 1
-        break
-    end
-end
-
-cutoff
-sort_cumsum[cutoff]
-
-min_inclusion_freq = sort_relative_inclusion_freq[cutoff]
-
-sum(sort_indices .>= cutoff)
-sum(relative_inclusion_freq .>= min_inclusion_freq)
-
-plt = scatter(relative_inclusion_freq)
-hline!([min_inclusion_freq])
-vspan!(plt, [p0 + 1, p], color = :green, alpha = 0.2, labels = "true active coefficients")
-
-excluded = relative_inclusion_freq .<= min_inclusion_freq
-included = relative_inclusion_freq .> min_inclusion_freq
-range_p = collect(range(1, p))
-
-plt = scatter(range_p[excluded], relative_inclusion_freq[excluded], label="Out")
-scatter!(range_p[included], relative_inclusion_freq[included], label="In")
-vspan!(plt, [p0 + 1, p], color = :green, alpha = 0.2, labels = "true active coefficients")
-
-selection = relative_inclusion_freq .> sort_relative_inclusion_freq[cutoff]
-
-classification_metrics.wrapper_metrics(
-    true_coef .> 0.,
-    selection .> 0
-)
-
-
 histogram(optimal_t)
+histogram(fdr)
+histogram(output)
+
 
 plt_n = histogram(output, label="# inc. covs")
 vline!([mean(output)], color="red", label="Mean #", linewidth=5)
@@ -411,6 +464,7 @@ vline!([mean(fdr)], color="red", label="Mean FDR", linewidth=5)
 plt = plot(plt_fdr, plt_n)
 savefig(plt, joinpath(abs_project_path, "results", "ms_analysis", "$(label_files)_bayesian_fdr_n.pdf"))
 
+scatter(sum(selection_matrix, dims=1)[1, :])
 
 mean_selection_matrix = mean(selection_matrix, dims=2)[:, 1]
 sum(mean_selection_matrix[mean_selection_matrix .> 0.5])
@@ -421,6 +475,10 @@ vspan!(plt, [p0 + 1, p], color = :green, alpha = 0.2, labels = "true active coef
 xlabel!("Regression Coefficients", labelfontsize=15)
 ylabel!("Inclusion Probability", labelfontsize=15)
 savefig(plt, joinpath(abs_project_path, "results", "ms_analysis", "$(label_files)_mean_selection_matrix.pdf"))
+
+c_opt, selection = MirrorStatistic.posterior_fdr_threshold(mean_selection_matrix, fdr_target)
+sum((1 .- mean_selection_matrix) .<= c_opt)
+
 
 scatter(sort_indices[excluded], mean_selection_matrix[excluded])
 scatter!(sort_indices[included], mean_selection_matrix[included])
