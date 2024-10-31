@@ -22,7 +22,7 @@ include(joinpath(abs_project_path, "src", "utils", "mixed_models_data_generation
 n_individuals = 200
 
 p = 1000
-prop_non_zero = 0.025
+prop_non_zero = 0.05
 p1 = Int(p * prop_non_zero)
 p0 = p - p1
 corr_factor = 0.5
@@ -35,6 +35,8 @@ n_simulations = 10
 random_seed = 1234
 simulations_models = Dict()
 simulations_metrics = Dict()
+
+label_files = "algo_HS_linear_n$(n_individuals)_p$(p)_active$(p1)_r$(Int(corr_factor*100))"
 
 params_dict = OrderedDict()
 
@@ -159,9 +161,6 @@ for simu = 1:n_simulations
 end
 
 
-label_files = "algo_HS_linear_n$(n_individuals)_p$(p)_active$(p1)_r$(Int(corr_factor*100))"
-
-
 mean_fdr = []
 mean_tpr = []
 posterior_fdr = []
@@ -197,10 +196,14 @@ title!("FDR", titlefontsize=20)
 
 plt = plot(plt_fdr, plt_tpr)
 
-plt = boxplot(posterior_fdr, label=false)
-boxplot!(posterior_tpr, label=false)
+plt = violin([1], posterior_fdr, color="lightblue", label=false, alpha=1, linewidth=0)
+boxplot!([1], posterior_fdr, label=false, color="blue", fillalpha=0.1, linewidth=2)
+
+violin!([2], posterior_tpr, color="lightblue", label=false, alpha=1, linewidth=0)
+boxplot!([2], posterior_tpr, label=false, color="blue", fillalpha=0.1, linewidth=2)
+
 xticks!([1, 2], ["FDR", "TPR"], tickfontsize=15)
-yticks!(range(0, 1, step=0.1))
+yticks!(range(0, 1, step=0.1), tickfontsize=15)
 
 savefig(plt, joinpath(abs_project_path, "results", "simulations", "$(label_files)_fdrtpr_boxplot.pdf"))
 
@@ -247,16 +250,15 @@ for simu = 1:n_simulations
 
 end
 
+plt = violin([1], ds_fdr, color="lightblue", label=false, alpha=1, linewidth=0)
+boxplot!([1], ds_fdr, label=false, color="blue", fillalpha=0.1, linewidth=2)
 
-plt_tpr = boxplot(ds_tpr, label=false)
-xaxis!([])
-title!("TPR", titlefontsize=20)
+violin!([2], ds_tpr, color="lightblue", label=false, alpha=1, linewidth=0)
+boxplot!([2], ds_tpr, label=false, color="blue", fillalpha=0.1, linewidth=2)
 
-plt_fdr = boxplot(ds_fdr, label=false)
-xaxis!([])
-title!("FDR", titlefontsize=20)
+xticks!([1, 2], ["FDR", "TPR"], tickfontsize=15)
+yticks!(range(0, 1, step=0.1), tickfontsize=15)
 
-plt = plot(plt_fdr, plt_tpr)
 savefig(plt, joinpath(abs_project_path, "results", "simulations", "$(label_files)_fdrtpr_boxplot_DS.pdf"))
 
 
@@ -294,13 +296,13 @@ res = training_loop(;
     vi_dist=vi_dist,
     z_dim=params_dict["tot_params"]*2,
     n_iter=4000,
-    n_chains=1,
+    n_chains=2,
     samples_per_step=2,
-    use_noisy_grads=true,
+    use_noisy_grads=false,
     n_cycles=1
 )
 
-plot(res["elbo_trace"][num_iter:end])
+plot(res["elbo_trace"][num_iter:end, 1])
 
 vi_posterior = average_posterior(
     res["posteriors"],
@@ -341,6 +343,47 @@ boxplot!(metrics.tpr_distribution, label="TPR")
 
 plt = fdr_n_hist(metrics)
 savefig(plt, joinpath(abs_project_path, "results", "simulations", "$(label_files)_fdr_n_hist.pdf"))
+
+
+plt_n = histogram(metrics.n_inclusion_per_mc, bins=10, label=false, normalize=true)
+xlabel!("# variables included", labelfontsize=15)
+vline!([mean(metrics.n_inclusion_per_mc)], color = :red, linewidth=5, label="average")
+display(plt_n)
+savefig(plt_n, joinpath(abs_project_path, "results", "ms_analysis", "$(label_files)_n_vars_included.pdf"))
+
+n_inclusion_per_coef = sum(metrics.inclusion_matrix, dims=2)[:,1]
+mean_inclusion_per_coef = mean(metrics.inclusion_matrix, dims=2)[:,1]
+
+c_opt, selection = MirrorStatistic.posterior_fdr_threshold(
+    mean_inclusion_per_coef,
+    fdr_target
+)
+sum((1 .- mean_inclusion_per_coef) .<= c_opt)
+
+metrics = MirrorStatistic.wrapper_metrics(
+    data_dict["beta"] .!= 0.,
+    selection
+)
+
+plt_probs = scatter(
+    findall((1 .- mean_inclusion_per_coef) .> c_opt),
+    mean_inclusion_per_coef[findall((1 .- mean_inclusion_per_coef) .> c_opt)],
+    label=false, markersize=3,
+)
+scatter!(
+    findall((1 .- mean_inclusion_per_coef) .<= c_opt),
+    mean_inclusion_per_coef[findall((1 .- mean_inclusion_per_coef) .<= c_opt)],
+    label="Selected", markersize=5,
+)
+xlabel!("Coefficients", labelfontsize=15)
+ylabel!("Inclusion Probability", labelfontsize=15)
+vspan!(plt_probs, [p0+1, p], color = :green, alpha = 0.2, labels = "true active coefficients")
+display(plt_probs)
+savefig(plt_probs, joinpath(abs_project_path, "results", "ms_analysis", "$(label_files)_mean_selection_matrix.pdf"))
+
+plt = plot(plt_n, plt_probs)
+savefig(plt, joinpath(abs_project_path, "results", "simulations", "$(label_files)_n_and_probs.pdf"))
+
 
 # range
 boxplot(metrics.fdr_range, label="FDR")
@@ -401,3 +444,68 @@ range_p = collect(range(1, p))
 plt = scatter(range_p[excluded], metrics.relative_inclusion_freq[excluded], label="Out")
 scatter!(range_p[included], metrics.relative_inclusion_freq[included], label="In")
 vspan!(plt, [p0 + 1, p], color = :green, alpha = 0.2, labels = "true active coefficients")
+
+# Using lambda as inclusion probabilities
+sigma_samples = extract_parameter(
+    prior="sigma_y",
+    params_dict=params_dict,
+    samples_posterior=samples_posterior
+)
+mean(sigma_samples)
+
+lambda_samples = extract_parameter(
+    prior="sigma_beta",
+    params_dict=params_dict,
+    samples_posterior=samples_posterior
+)
+plt = density(lambda_samples', label=false)
+mean_lambda = mean(lambda_samples, dims=2)[:, 1]
+scatter(mean_lambda)
+scatter(1 .- 1 ./ (1 .+ mean_lambda.^2 .* mean(sigma_samples)) )
+probs_inc = 1 .- 1 ./ (1 .+ mean_lambda.^2)
+
+function fdp_estimate(ms_samples, probs, t)
+    
+    Dp = ms_samples .> t
+    
+    # d(t)(w > t) * (1 - r)
+    fp_est = sum(Dp .* (1 .- probs))
+    tot_d = sum(Dp)
+    fdp = fp_est / tot_d
+    
+    return fdp
+end
+
+function mc_fdp_estimate(ms_samples, probs, t)
+    fdr_MC_t = []
+    for m in eachcol(ms_samples)
+        push!(fdr_MC_t, fdp_estimate(m, probs, t))
+    end
+    return fdr_MC_t
+end
+
+ms_samples = rand(ms_dist, MC_SAMPLES)
+
+sum(ms_samples .> 0.5, dims=2) / MC_SAMPLES
+
+fdp_estimate(ms_samples[:, 1], probs_inc, 0.8)
+mc_fdp_estimate(ms_samples, probs_inc, 0.3)
+
+ms_samples = rand(ms_dist, 1)
+scatter(ms_samples)
+fdr = []
+t_range = range(minimum(abs.(ms_samples)), maximum(abs.(ms_samples)), length=100)
+t_range = sort(abs.(ms_samples[:, 1]))
+for t in t_range
+    push!(fdr, mean(mc_fdp_estimate(ms_samples, probs_inc, t)))
+end
+scatter(t_range, fdr)
+
+opt_t = 0
+for t in t_range
+    if mean(mc_fdp_estimate(ms_samples, probs_inc, t)) < 0.1
+        opt_t = t
+        break
+    end
+end
+mean(mc_fdp_estimate(ms_samples, probs_inc, opt_t))

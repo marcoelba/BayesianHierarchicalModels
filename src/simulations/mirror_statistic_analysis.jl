@@ -166,20 +166,6 @@ function mc_fdp_estimate(ms_samples, t)
     return fdr_MC_t
 end
 
-# Optim
-using Optim
-
-function f_optim(t)
-    # ms_samples = rand(ms_dist_vec)
-    ms_samples = mean_vec
-    abs(fdp_estimate(ms_samples, t[1]) - 0.1)
-end
-f_optim(1.)
-
-result = Optim.optimize(f_optim, [0.001])
-Optim.minimizer(result)
-Optim.minimum(result)
-
 
 ms_samples = rand(ms_dist_vec, 1)
 ms_samples = mean_vec

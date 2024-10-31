@@ -10,7 +10,7 @@ abs_project_path = normpath(joinpath(@__FILE__, "..", "..", ".."))
 include(joinpath(abs_project_path, "src", "model_building", "mirror_statistic.jl"))
 include(joinpath(abs_project_path, "src", "utils", "classification_metrics.jl"))
 
-label_files = "ms_analysis_full_identification"
+label_files = "ms_analysis_partial_identification"
 
 function mean_folded_normal(mu, sigma)
     sigma * sqrt(2/pi) * exp(-0.5 *(mu/sigma)^2) + mu * (1 - 2*cdf(Normal(), -(mu/sigma)))
@@ -29,12 +29,12 @@ true_coef = vcat(zeros(p0), ones(p1))
 
 fdr_target = 0.1
 fp = 0
-fn = 0
+fn = 30
 
 Random.seed!(35)
 
 posterior_mean_null = vcat(randn(p0) * 0.05, rand([-0.2, 0.2], 0))
-posterior_mean_active = vcat(randn(p1 - fn) * 0.05 .+ rand([-2., 2.], p1-fn), randn(fn) * 0.1 .+ 0.5)
+posterior_mean_active = vcat(randn(p1 - fn) * 0.05 .+ rand([-2., 2.], p1-fn), randn(fn) * 0.1 .+ 0.2)
 
 posterior_mean = vcat(posterior_mean_null, posterior_mean_active)
 
@@ -154,6 +154,7 @@ for c in tau_range
 end
 scatter(tau_range, fdp)
 vline!([1-c_opt])
+hline!([fdr_target])
 
 # distribution
 fdr = []

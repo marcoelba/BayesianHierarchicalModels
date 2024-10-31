@@ -23,7 +23,7 @@ n_individuals = 200
 n_time_points = 5
 
 p = 1000
-prop_non_zero = 0.025
+prop_non_zero = 0.05
 p1 = Int(p * prop_non_zero)
 p0 = p - p1
 corr_factor = 0.5
@@ -39,6 +39,9 @@ n_simulations = 10
 random_seed = 1234
 simulations_models = Dict()
 simulations_metrics = Dict()
+
+label_files = "algo_HS_rand_int_n$(n_individuals)_T$(n_time_points)_p$(p)_active$(p1)_r$(Int(corr_factor*100))"
+
 
 params_dict = OrderedDict()
 
@@ -181,6 +184,16 @@ for simu = 1:n_simulations
     )
     metrics_dict = Dict()
 
+    # Posterior
+    inclusion_probs = mean(metrics.inclusion_matrix, dims=2)[:, 1]
+    c_opt, selection = MirrorStatistic.posterior_fdr_threshold(inclusion_probs, fdr_target)
+
+    metrics_posterior = MirrorStatistic.wrapper_metrics(
+        data_dict["beta_fixed"] .!= 0.,
+        selection
+    )
+    metrics_dict["metrics_posterior"] = metrics_posterior
+
     metrics_dict["fdr_range"] = metrics.fdr_range
     metrics_dict["tpr_range"] = metrics.tpr_range
     
@@ -191,51 +204,50 @@ for simu = 1:n_simulations
 
 end
 
-
-label_files = "algo_HS_rand_int_n$(n_individuals)_T$(n_time_points)_p$(p)_active$(p1)_r$(Int(corr_factor*100))"
-
-median_fdr = []
-median_tpr = []
-
 mean_fdr = []
 mean_tpr = []
+posterior_fdr = []
+posterior_tpr = []
 
 for simu = 1:n_simulations
-    push!(median_fdr, simulations_metrics[simu]["metrics_median"].fdr)
-    push!(median_tpr, simulations_metrics[simu]["metrics_median"].tpr)
-
     push!(mean_fdr, simulations_metrics[simu]["metrics_mean"].fdr)
     push!(mean_tpr, simulations_metrics[simu]["metrics_mean"].tpr)
 
+    push!(posterior_fdr, simulations_metrics[simu]["metrics_posterior"].fdr)
+    push!(posterior_tpr, simulations_metrics[simu]["metrics_posterior"].tpr)
+
 end
 
-all_metrics = hcat(mean_fdr, median_fdr, mean_tpr, median_tpr)
-df = DataFrame(all_metrics, ["mean_fdr", "median_fdr", "mean_tpr", "median_tpr"])
+all_metrics = hcat(mean_fdr, posterior_fdr, mean_tpr, posterior_tpr)
+df = DataFrame(all_metrics, ["mean_fdr", "posterior_fdr", "mean_tpr", "posterior_tpr"])
 
 CSV.write(
     joinpath(abs_project_path, "results", "simulations", "$(label_files).csv"),
     df
 )
-# df = CSV.read(
-#     joinpath(abs_project_path, "results", "simulations", "$(label_files).csv"),
-#     DataFrame
-# )
 
 
 plt_tpr = boxplot(mean_tpr, label=false)
-boxplot!(median_tpr, label=false)
-xticks!([1, 2], ["Mean", "Median"], tickfontsize=10)
+boxplot!(posterior_tpr, label=false)
+xticks!([1, 2], ["Mean", "Posterior"], tickfontsize=10)
 title!("TPR", titlefontsize=20)
 
 plt_fdr = boxplot(mean_fdr, label=false)
-boxplot!(median_fdr, label=false)
-xticks!([1, 2], ["Mean", "Median"], tickfontsize=10)
+boxplot!(posterior_fdr, label=false)
+xticks!([1, 2], ["Mean", "Posterior"], tickfontsize=10)
 title!("FDR", titlefontsize=20)
 
-plt = plot(plt_fdr, plt_tpr)
+savefig(plt, joinpath(abs_project_path, "results", "simulations", "$(label_files)_fdrtpr_boxplot.pdf"))
 
-plt = boxplot(df[!, "mean_fdr"], label="Mean FDR")
-boxplot!(df[!, "mean_tpr"], label="Mean TPR")
+
+plt = violin([1], posterior_fdr, color="lightblue", label=false, alpha=1, linewidth=0)
+boxplot!([1], posterior_fdr, label=false, color="blue", fillalpha=0.1, linewidth=2)
+
+violin!([2], posterior_tpr, color="lightblue", label=false, alpha=1, linewidth=0)
+boxplot!([2], posterior_tpr, label=false, color="blue", fillalpha=0.1, linewidth=2)
+
+xticks!([1, 2], ["FDR", "TPR"], tickfontsize=15)
+yticks!(range(0, 1, step=0.1), tickfontsize=15)
 
 savefig(plt, joinpath(abs_project_path, "results", "simulations", "$(label_files)_fdrtpr_boxplot.pdf"))
 
@@ -330,15 +342,15 @@ res = training_loop(;
     log_joint=partial_log_joint,
     vi_dist=vi_dist,
     z_dim=params_dict["tot_params"]*2,
-    n_iter=num_iter,
+    n_iter=10000,
     n_chains=n_chains,
     samples_per_step=2,
     sd_init=0.5f0,
-    use_noisy_grads=false,
-    n_cycles=1
+    use_noisy_grads=true,
+    n_cycles=4
 )
 
-plot(res["elbo_trace"][2500:end])
+plot(res["elbo_trace"][4000:end])
 plot(res["elbo_trace"][500:end])
 
 vi_posterior = average_posterior(
@@ -367,7 +379,7 @@ beta0_samples = extract_parameter(
 )
 plt = density(beta0_samples', label=false)
 ylabel!("Density")
-savefig(plt, joinpath(abs_project_path, "results", "simulations", "$(label_files)_posterior_beta.pdf"))
+savefig(plt, joinpath(abs_project_path, "results", "simulations", "$(label_files)_posterior_beta0.pdf"))
 
 beta_time_samples = extract_parameter(
     prior="beta_time",
@@ -376,7 +388,7 @@ beta_time_samples = extract_parameter(
 )
 plt = density(beta_time_samples', label=false)
 ylabel!("Density")
-savefig(plt, joinpath(abs_project_path, "results", "simulations", "$(label_files)_posterior_beta.pdf"))
+savefig(plt, joinpath(abs_project_path, "results", "simulations", "$(label_files)_posterior_beta_time.pdf"))
 
 # ------ Mirror Statistic ------
 
@@ -394,22 +406,59 @@ metrics = MirrorStatistic.optimal_inclusion(
 )
 
 # Posterior
-inclusion_probs = mean(metrics.inclusion_matrix, dims=2)[:, 1]
-inclusion_probs
-c_opt, selection = MirrorStatistic.posterior_fdr_threshold(inclusion_probs, fdr_target / 0.9)
-sum(selection)
+plt_n = histogram(metrics.n_inclusion_per_mc, bins=10, label=false, normalize=true)
+xlabel!("# variables included", labelfontsize=15)
+vline!([mean(metrics.n_inclusion_per_mc)], color = :red, linewidth=5, label="average")
+display(plt_n)
+savefig(plt_n, joinpath(abs_project_path, "results", "simulations", "$(label_files)_n_vars_included.pdf"))
+
+n_inclusion_per_coef = sum(metrics.inclusion_matrix, dims=2)[:,1]
+mean_inclusion_per_coef = mean(metrics.inclusion_matrix, dims=2)[:,1]
+
+c_opt, selection = MirrorStatistic.posterior_fdr_threshold(
+    mean_inclusion_per_coef,
+    fdr_target
+)
+sum((1 .- mean_inclusion_per_coef) .<= c_opt)
 
 MirrorStatistic.wrapper_metrics(
     data_dict["beta_fixed"] .!= 0.,
     selection
 )
 
-n = []
-for q in range(0, 1., length=100)
-    c_opt, selection = MirrorStatistic.posterior_fdr_threshold(inclusion_probs, q)
-    push!(n, sum(selection))
+plt_probs = scatter(
+    findall((1 .- mean_inclusion_per_coef) .> c_opt),
+    mean_inclusion_per_coef[findall((1 .- mean_inclusion_per_coef) .> c_opt)],
+    label=false, markersize=3,
+)
+scatter!(
+    findall((1 .- mean_inclusion_per_coef) .<= c_opt),
+    mean_inclusion_per_coef[findall((1 .- mean_inclusion_per_coef) .<= c_opt)],
+    label="Selected", markersize=5,
+)
+xlabel!("Coefficients", labelfontsize=15)
+ylabel!("Inclusion Probability", labelfontsize=15)
+vspan!(plt_probs, [p0+1, p], color = :green, alpha = 0.2, labels = "true active coefficients")
+display(plt_probs)
+savefig(plt_probs, joinpath(abs_project_path, "results", "simulations", "$(label_files)_mean_selection_matrix.pdf"))
+
+plt = plot(plt_n, plt_probs)
+savefig(plt, joinpath(abs_project_path, "results", "simulations", "$(label_files)_n_and_probs.pdf"))
+
+
+# Look in to the details!!
+fp_prob = 1. .- mean_inclusion_per_coef
+c_opt = 0.
+
+for c in sort(mean_inclusion_per_coef, rev=false)
+    lower_than_c = mean_inclusion_per_coef .> c
+    if (sum(fp_prob .* lower_than_c) / sum(lower_than_c)) <= fdr_target
+        c_opt = c
+        break
+    end
 end
-scatter(range(0, 1., length=100), n)
+sum(mean_inclusion_per_coef .> c_opt)
+
 
 # distribution
 boxplot(metrics.fdr_distribution, label="FDR")

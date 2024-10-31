@@ -171,28 +171,6 @@ function optimal_inclusion(;ms_dist_vec, mc_samples::Int64, beta_true, fdr_targe
         fdr_distribution[nn] = metrics.fdr
         tpr_distribution[nn] = metrics.tpr
     end
-
-    # relative inclusion frequency
-    dimension_subsets = sum(inclusion_matrix, dims=1)
-    relative_inclusion_freq = mean(inclusion_matrix ./ dimension_subsets, dims=2)[:, 1]
-
-    sort_relative_inclusion_freq = sort(relative_inclusion_freq)
-    sort_indices = sortperm(relative_inclusion_freq, rev=false)
-    sort_cumsum = cumsum(sort_relative_inclusion_freq)
-
-    cutoff = 0
-    for jj = 1:p
-        if sort_cumsum[jj] > fdr_target
-            cutoff = jj - 1
-            break
-        end
-    end
-
-    selection = relative_inclusion_freq .> sort_relative_inclusion_freq[cutoff]
-    metrics_relative = wrapper_metrics(
-        beta_true .!= 0.,
-        selection
-    )
     
     return (
         fdr_range=fdr_range,
@@ -203,10 +181,7 @@ function optimal_inclusion(;ms_dist_vec, mc_samples::Int64, beta_true, fdr_targe
         metrics_median=metrics_median,
         inclusion_matrix=inclusion_matrix,
         n_inclusion_per_mc=n_inclusion_per_mc,
-        opt_t=opt_t,
-        metrics_relative=metrics_relative,
-        relative_inclusion_freq=relative_inclusion_freq,
-        min_inclusion_freq=sort_relative_inclusion_freq[cutoff]
+        opt_t=opt_t
     )
 end
 
