@@ -13,6 +13,7 @@ include(joinpath(abs_project_path, "src", "model_building", "distributions_logpd
 include(joinpath(abs_project_path, "src", "model_building", "variational_distributions.jl"))
 include(joinpath(abs_project_path, "src", "model_building", "mirror_statistic.jl"))
 include(joinpath(abs_project_path, "src", "utils", "mixed_models_data_generation.jl"))
+include(joinpath(abs_project_path, "src", "model_building", "vectorised_bijectors.jl"))
 
 
 n_individuals = 100
@@ -39,7 +40,7 @@ params_dict = OrderedDict()
 update_parameters_dict(
     params_dict;
     name="beta0",
-    size=1,
+    dimension=(1,),
     log_prob_fun=x::Float32 -> DistributionsLogPdf.log_normal(x)
 )
 
@@ -47,8 +48,8 @@ update_parameters_dict(
 update_parameters_dict(
     params_dict;
     name="sigma_beta",
-    size=p,
-    bij=StatsFuns.softplus,
+    dimension=(p,),
+    bij=VectorizedBijectors.softplus,
     log_prob_fun=x::AbstractArray{Float32} -> sum(Distributions.logpdf.(
         truncated(Cauchy(0f0, 1f0), 0f0, Inf32),
         x
@@ -57,7 +58,7 @@ update_parameters_dict(
 update_parameters_dict(
     params_dict;
     name="beta",
-    size=p,
+    dimension=(p,),
     log_prob_fun=(x::AbstractArray{Float32}, sigma::AbstractArray{Float32}) -> DistributionsLogPdf.log_normal(x, sigma=sigma),
     dependency=["sigma_beta"]
 )
@@ -71,7 +72,10 @@ model(theta_components) = Predictors.linear_predictor(
 )
 model(get_parameters_axes(params_dict)[2])
 
-DistributionsLogPdf.log_bernoulli_from_logit(data_dict["y"], model(get_parameters_axes(params_dict)[2])...)
+DistributionsLogPdf.log_bernoulli_from_logit(
+    data_dict["y"],
+    model(get_parameters_axes(params_dict)[2])...
+)
 
 # model
 partial_log_joint(theta) = log_joint(
@@ -100,12 +104,12 @@ res = training_loop(;
     n_chains=n_chains,
     samples_per_step=2,
     sd_init=0.5f0,
-    use_noisy_grads=true,
-    n_cycles=4
+    use_noisy_grads=false,
+    n_cycles=1
 )
 
 plot(res["elbo_trace"][100:end, :])
-plot(res["elbo_trace"][500:end, :])
+plot(res["elbo_trace"][3000:end, :])
 
 vi_posterior = average_posterior(
     res["posteriors"],
@@ -145,6 +149,33 @@ boxplot(metrics.fdr_distribution, label="FDR")
 boxplot!(metrics.tpr_distribution, label="TPR")
 
 plt = fdr_n_hist(metrics)
+
+# Newton's rule
+n_inclusion_per_coef = sum(metrics.inclusion_matrix, dims=2)[:,1]
+mean_inclusion_per_coef = mean(metrics.inclusion_matrix, dims=2)[:,1]
+
+c_opt, selection = MirrorStatistic.posterior_fdr_threshold(
+    mean_inclusion_per_coef,
+    0.1
+)
+sum((1 .- mean_inclusion_per_coef) .<= c_opt)
+
+metrics = MirrorStatistic.wrapper_metrics(
+    data_dict["beta"] .!= 0.,
+    selection
+)
+
+plt_probs = scatter(
+    findall((1 .- mean_inclusion_per_coef) .> c_opt),
+    mean_inclusion_per_coef[findall((1 .- mean_inclusion_per_coef) .> c_opt)],
+    label=false, markersize=3,
+)
+scatter!(
+    findall((1 .- mean_inclusion_per_coef) .<= c_opt),
+    mean_inclusion_per_coef[findall((1 .- mean_inclusion_per_coef) .<= c_opt)],
+    label="Selected", markersize=5,
+)
+
 
 # range
 metrics.metrics_mean
