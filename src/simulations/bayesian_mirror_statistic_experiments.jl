@@ -5,6 +5,7 @@ using Random
 using LinearAlgebra
 using Turing
 using StatsFuns
+using StatsBase
 
 abs_project_path = normpath(joinpath(@__FILE__, "..", "..", ".."))
 include(joinpath(abs_project_path, "src", "model_building", "mirror_statistic.jl"))
@@ -183,7 +184,7 @@ histogram(fdr, label=false)
 """
 Less clearly identified coefficients
 """
-label_files = "weaker_identification"
+label_files = "higher_var"
 
 p0 = 900
 p1 = 100
@@ -204,7 +205,7 @@ posterior_mean_active = vcat(
 
 posterior_mean = vcat(posterior_mean_null, posterior_mean_active)
 
-posterior_std_null = vcat(abs.(randn(p0 - fp) * 0.5) .+ 0.1, abs.(rand([0.5], fp)))
+posterior_std_null = vcat(abs.(randn(p0 - fp) * 0.05) .+ 0.1, abs.(rand([0.5], fp)))
 posterior_std_active = abs.(randn(p1) * 0.05) .+ 0.1
 posterior_std = vcat(posterior_std_null, posterior_std_active)
 
@@ -279,6 +280,7 @@ savefig(plt_n, joinpath(abs_project_path, "results", "ms_analysis", "$(label_fil
 
 n_inclusion_per_coef = sum(inclusion_matrix, dims=2)[:,1]
 mean_inclusion_per_coef = mean(inclusion_matrix, dims=2)[:,1]
+scatter(mean_inclusion_per_coef)
 fp_prob = 1 .- mean_inclusion_per_coef
 
 c_opt, selection = MirrorStatistic.posterior_fdr_threshold(
@@ -293,6 +295,9 @@ metrics = classification_metrics.wrapper_metrics(
 )
 
 sum(fp_prob[selection]) / sum(selection)
+sum(sort(fp_prob[selection], rev=true)[1:12])
+
+sum(fp_prob[selection] ./ sum(selection))
 
 
 plt_probs = scatter(
@@ -317,65 +322,85 @@ savefig(plt, joinpath(abs_project_path, "results", "ms_analysis", "$(label_files
 
 # Density of selected covariates
 Random.seed!(123)
-plt = density(rand(posterior, mc_samples)[selection, :]', label=false)
-xlabel!("Coefficients", labelfontsize=15)
-vspan!(plt, [p0+1, p], color = :green, alpha = 0.2, labels = "true active coefficients");
+posterior_samples = rand(posterior, mc_samples)
+true_positives = findall((true_coef .!= 0) .* selection)
+false_positives = findall((true_coef .== 0) .* selection)
+blue_col = cgrad(:blues, 100, categorical=true)
+red_col = cgrad(:reds, length(false_positives), categorical=true)
+
+plt = plot()
+for (jj, pos) in enumerate(true_positives)
+    density!(
+        posterior_samples[pos, :],
+        label=false,
+        color=blue_col[jj]
+    )
+end
+for (jj, pos) in enumerate(false_positives)
+    density!(
+        posterior_samples[pos, :],
+        label=false,
+        color=red_col[jj]
+    )
+end
+xlabel!("Density Selected Coefficients", labelfontsize=15)
 display(plt)
-savefig(plt, joinpath(abs_project_path, "results", "ms_analysis", "$(label_files)_sample_posterior.pdf"))
+savefig(plt, joinpath(abs_project_path, "results", "ms_analysis", "$(label_files)_density_selected_coefs.pdf"))
 
-#
-function minmax_01(x)
-    minx = minimum(x)
-    maxx = maximum(x)
-    (x .- minx) ./ (maxx .- minx)
+# posterior inference false positives
+posterior_samples[false_positives, :]
+for jj in false_positives
+    quantile(posterior_samples[jj, :], 0.025)
 end
 
-posterior_sample = rand(posterior, mc_samples)
-plt = density(posterior_sample[[1, 2, 3, p], :]', label=false)
-
-mirror_coefficients = rand(ms_dist_vec, mc_samples)
-plt = density(mirror_coefficients[[1, 2, 3, p], :]', label=false)
-
-probs_t = Distributions.cdf.(ms_vec, 0.)
-scatter(probs_t)
-probs_t = 1 .- minmax_01(probs_t)
-scatter(probs_t)
-
-function get_fdp(probs_t, tau)
-    sum((1 .- probs_t) .* (probs_t .> tau)) / sum(probs_t .> tau)
+# posterior inference excluded coefficients
+true_negatives = findall((true_coef .== 0) .* (selection .== 0))
+credible_int = []
+ci_selection = []
+for jj in true_negatives
+    ci = quantile(posterior_samples[jj, :], [0.025, 0.975])
+    push!(credible_int, ci)
+    push!(ci_selection, (ci[1] * ci[2]) > 0)
 end
-tau = 0.5
-get_fdp(probs_t, tau)
+sum(ci_selection)
 
-opt_t = 0
-for t in range(minimum(abs.(mirror_coefficients)), maximum(abs.(mirror_coefficients)), length=100)
-    if get_fdp(probs_t, t) < 0.1
-        opt_t = t
-        break
-    end
-end
-get_fdp(probs_t, opt_t)
+"""
+    Cutoff selection on probabilities
+"""
+fn = 0
+mean_inclusion_per_coef = vcat(
+    rand(Uniform(0., 0.01), p0),
+    rand(Uniform(0.9, 1.), p1 - fn),
+    rand(Uniform(0., 0.1), fn)
+)
+scatter(mean_inclusion_per_coef)
+fp_prob = 1 .- mean_inclusion_per_coef
 
-sum(probs_t .> opt_t)
+c_opt, selection = MirrorStatistic.posterior_fdr_threshold(
+    mean_inclusion_per_coef,
+    fdr_target
+)
+sum((1 .- mean_inclusion_per_coef) .<= c_opt)
 
 metrics = classification_metrics.wrapper_metrics(
     true_coef .!= 0.,
-    probs_t .> opt_t
+    selection
 )
 
-plt = density(mirror_coefficients[probs_t .> opt_t, :]', label=false)
-
-c_opt, selection = MirrorStatistic.posterior_fdr_threshold(
-    probs_t,
-    fdr_target
-)
-sum((1 .- probs_t) .<= c_opt)
+sum(fp_prob[selection]) / sum(selection)
 
 
+"""
+    Summary other than the mean
+"""
+fdr_target = 0.1
+mc_samples = 2000
+# no MC loop
+mirror_coefficients = rand(ms_dist_vec, mc_samples)
 opt_t = 0
 t = 0
 for t in range(0., maximum(mirror_coefficients), length=1000)
-    n_left_tail = sum((mirror_coefficients .> t) .* (1 .- probs_t))
+    n_left_tail = sum(mirror_coefficients .< -t)
     n_right_tail = sum(mirror_coefficients .> t)
     n_right_tail = ifelse(n_right_tail .> 0, n_right_tail, 1)
 
@@ -388,5 +413,36 @@ for t in range(0., maximum(mirror_coefficients), length=1000)
 end
 
 inclusion_matrix = mirror_coefficients .> opt_t
-n_inclusion_per_mc = sum(inclusion_matrix, dims=1)[1,:]
-average_inclusion_number = Int(round(mean(n_inclusion_per_mc)))
+inclusion_probs = mean(inclusion_matrix, dims=2)[:,1]
+inclusion_probs = inclusion_probs.^5
+scatter(inclusion_probs)
+fp_prob = 1 .- inclusion_probs
+
+c_opt, selection = MirrorStatistic.posterior_fdr_threshold(
+    inclusion_probs,
+    fdr_target
+)
+sum((1 .- inclusion_probs) .<= c_opt)
+
+metrics = classification_metrics.wrapper_metrics(
+    true_coef .> 0.,
+    selection
+)
+
+sum(fp_prob[selection]) / sum(selection)
+
+inclusion_sums = sum(inclusion_matrix, dims=2)[:,1]
+posterior_probs = Distributions.Beta.(
+    inclusion_sums .+ 1000,
+    mc_samples .- inclusion_sums .+ 1
+)
+post_inclusion_probs = mean.(posterior_probs)
+
+scatter(inclusion_probs)
+scatter!(post_inclusion_probs)
+
+c_opt, selection = MirrorStatistic.posterior_fdr_threshold(
+    post_inclusion_probs,
+    fdr_target
+)
+sum((1 .- post_inclusion_probs) .<= c_opt)
