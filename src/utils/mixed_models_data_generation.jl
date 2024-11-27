@@ -4,6 +4,7 @@ using Random
 using LinearAlgebra
 using ToeplitzMatrices
 using StatsFuns
+using Turing: arraydist
 
 
 function generate_mixed_model_data(;
@@ -161,13 +162,14 @@ function generate_logistic_model_data(;
     data_dict["beta0"] = beta0_fixed
     
     # Outcome
-    lin_pred = Xfix * beta_fixed .+ beta0_fixed .+ randn(n_individuals) .* obs_noise_sd
-    data_dict["y_logit"] = dtype.(lin_pred)
+    # lin_pred = Xfix * beta_fixed .+ beta0_fixed .+ randn(n_individuals) .* obs_noise_sd
 
-    # y_dist = arraydist([Distributions.Bernoulli(StatsFuns.logistic(logitp)) for logitp in lin_pred])
-    # y = rand(y_dist)
-    y = StatsFuns.logistic.(lin_pred) .> class_threshold
+    lin_pred = Xfix * beta_fixed .+ beta0_fixed
+    y_dist = arraydist([Distributions.Bernoulli(StatsFuns.logistic(logitp)) for logitp in lin_pred])
+    y = rand(y_dist)
+    # y = StatsFuns.logistic.(lin_pred) .> class_threshold
     data_dict["y"] = Int.(y)
+    data_dict["y_logit"] = dtype.(lin_pred)
 
     return data_dict
 end

@@ -82,11 +82,22 @@ plt = plot(plt_posterior, plt_ms)
 savefig(plt, joinpath(abs_project_path, "results", "ms_analysis", "$(label_files)_posterior_to_W.pdf"))
 
 
+analytic = false
+
 # Using the FDR criterion from MS
 fdr_target = 0.1
 mc_samples = 2000
 # no MC loop
-mirror_coefficients = rand(ms_dist_vec, mc_samples)
+
+if analytic
+    mirror_coefficients = rand(ms_dist_vec, mc_samples)
+else
+    beta_1 = rand(posterior, mc_samples)
+    beta_2 = rand(posterior, mc_samples)
+    mirror_coefficients = MirrorStatistic.mirror_statistic(beta_1, beta_2)
+    plt_ms = scatter(mirror_coefficients[:, 1], label=false, markersize=3)
+end
+
 opt_t = 0
 t = 0
 for t in range(0., maximum(mirror_coefficients), length=2000)
@@ -252,7 +263,16 @@ savefig(plt, joinpath(abs_project_path, "results", "ms_analysis", "$(label_files
 fdr_target = 0.1
 mc_samples = 2000
 # no MC loop
-mirror_coefficients = rand(ms_dist_vec, mc_samples)
+
+if analytic
+    mirror_coefficients = rand(ms_dist_vec, mc_samples)
+else
+    beta_1 = rand(posterior, mc_samples)
+    beta_2 = rand(posterior, mc_samples)
+    mirror_coefficients = MirrorStatistic.mirror_statistic(beta_1, beta_2)
+    plt_ms = scatter(mirror_coefficients[:, 1], label=false, markersize=3)
+end
+
 opt_t = 0
 t = 0
 for t in range(0., maximum(mirror_coefficients), length=1000)

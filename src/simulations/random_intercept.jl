@@ -22,8 +22,8 @@ include(joinpath(abs_project_path, "src", "model_building", "vectorised_bijector
 n_individuals = 200
 n_time_points = 5
 
-p = 1000
-prop_non_zero = 0.05
+p = 5000
+prop_non_zero = 0.01
 p1 = Int(p * prop_non_zero)
 p0 = p - p1
 corr_factor = 0.5
@@ -77,13 +77,17 @@ update_parameters_dict(
     name="sigma_beta",
     dimension=(p,),
     bij=VectorizedBijectors.softplus,
-    log_prob_fun=x::AbstractArray{Float32} -> DistributionsLogPdf.log_half_cauchy(x, sigma=Float32.(ones(p)*1))
+    log_prob_fun=x::AbstractArray{Float32} -> DistributionsLogPdf.log_half_cauchy(
+        x, sigma=Float32.(ones(p)*1)
+    )
 )
 update_parameters_dict(
     params_dict;
     name="beta_fixed",
     dimension=(p,),
-    log_prob_fun=(x::AbstractArray{Float32}, sigma::AbstractArray{Float32}) -> DistributionsLogPdf.log_normal(x, sigma=sigma),
+    log_prob_fun=(x::AbstractArray{Float32}, sigma::AbstractArray{Float32}) -> DistributionsLogPdf.log_normal(
+        x, sigma=sigma
+    ),
     dependency=["sigma_beta"]
 )
 
@@ -93,13 +97,17 @@ update_parameters_dict(
     name="sigma_beta_time",
     dimension=(1,),
     bij=VectorizedBijectors.softplus,
-    log_prob_fun=x::Float32 -> DistributionsLogPdf.log_half_cauchy(x, sigma=1f0)
+    log_prob_fun=x::Float32 -> DistributionsLogPdf.log_half_cauchy(
+        x, sigma=Float32(p1/n_individuals)
+    )
 )
 update_parameters_dict(
     params_dict;
     name="beta_time",
     dimension=(n_time_points,),
-    log_prob_fun=(x::AbstractArray{Float32}, sigma::Float32) -> DistributionsLogPdf.log_normal(x, sigma=Float32.(ones(n_time_points)).*sigma),
+    log_prob_fun=(x::AbstractArray{Float32}, sigma::Float32) -> DistributionsLogPdf.log_normal(
+        x, sigma=Float32.(ones(n_time_points)) .* sigma
+    ),
     dependency=["sigma_beta_time"]
 )
 
@@ -342,16 +350,16 @@ res = training_loop(;
     log_joint=partial_log_joint,
     vi_dist=vi_dist,
     z_dim=params_dict["tot_params"]*2,
-    n_iter=10000,
+    n_iter=3000,
     n_chains=n_chains,
     samples_per_step=2,
     sd_init=0.5f0,
     use_noisy_grads=true,
-    n_cycles=4
+    n_cycles=1
 )
 
-plot(res["elbo_trace"][4000:end])
-plot(res["elbo_trace"][500:end])
+plot(res["elbo_trace"])
+plot(res["elbo_trace"][2000:end])
 
 vi_posterior = average_posterior(
     res["posteriors"],
@@ -360,7 +368,7 @@ vi_posterior = average_posterior(
 samples_posterior = posterior_samples(
     vi_posterior=vi_posterior,
     params_dict=params_dict,
-    n_samples=MC_SAMPLES
+    n_samples=500
 )
 beta_samples = extract_parameter(
     prior="beta_fixed",

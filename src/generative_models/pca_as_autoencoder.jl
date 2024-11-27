@@ -181,6 +181,7 @@ mean((y_test .- y_test_pred_ae).^2)
 """
 using Fluxperimental
 
+subset_dim = 3
 ae_dim = subset_dim
 
 # AE model
@@ -253,10 +254,10 @@ for epoch = 1:epochs
 
 end
 
-plot(train_loss_trace)
+plot(train_loss_trace, label="train")
 plot!(test_loss_trace)
-plot!(test_loss_ae_trace)
-plot!(test_loss_lin_trace)
+plot!(test_loss_ae_trace, label="AE test")
+plot!(test_loss_lin_trace, label="LIN test")
 
 Flux.params(joint_model)[1]'
 Flux.params(joint_model)[2]'
@@ -269,6 +270,6 @@ beta_ols_ae = inv(X_fit_ae' * X_fit_ae) * X_fit_ae' * y_train
 y_train_pred_ae = X_fit_ae * beta_ols_ae
 mean((y_train .- y_train_pred_ae).^2)
 
-X_test_fit_ae = X_test * Flux.params(model)[1]'
+X_test_fit_ae = X_test * Flux.params(joint_model)[3]'
 y_test_pred_ae = X_test_fit_ae * beta_ols_ae
 mean((y_test .- y_test_pred_ae).^2)

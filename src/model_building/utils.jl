@@ -217,7 +217,7 @@ function training_loop(;
                 if use_noisy_grads
                     grad_noise = Float32.(randn(z_dim)) .* lr_schedule[step]
                 else
-                    grad_noise = 0f0
+                    grad_noise = Float32.(randn(z_dim)) .* lr_schedule[n_iter]
                 end
             else
                 grad_noise = 0f0
