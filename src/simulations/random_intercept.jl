@@ -22,12 +22,12 @@ include(joinpath(abs_project_path, "src", "model_building", "vectorised_bijector
 n_individuals = 200
 n_time_points = 5
 
-p = 5000
+p = 1000
 prop_non_zero = 0.01
 p1 = Int(p * prop_non_zero)
 p0 = p - p1
 corr_factor = 0.5
-beta_time=Float32.([0, 2, 1, 0, 0])
+beta_time=Float32.([0, 1, 2, 3, 4])
 beta_pool=Float32.([-1., 1])
 
 n_chains = 1
@@ -327,7 +327,7 @@ data_dict = generate_mixed_model_data(;
 )
 
 # model predictions
-model(theta_components) = Predictors.linear_random_intercept_model(
+model(theta_components) = Predictors.linear_time_model(
     theta_components;
     Xfix=data_dict["Xfix"]
 )
@@ -354,7 +354,7 @@ res = training_loop(;
     n_chains=n_chains,
     samples_per_step=2,
     sd_init=0.5f0,
-    use_noisy_grads=true,
+    use_noisy_grads=false,
     n_cycles=1
 )
 
@@ -394,9 +394,17 @@ beta_time_samples = extract_parameter(
     params_dict=params_dict,
     samples_posterior=samples_posterior
 )
-plt = density(beta_time_samples', label=false)
+plt = density(beta_time_samples', label=true)
 ylabel!("Density")
 savefig(plt, joinpath(abs_project_path, "results", "simulations", "$(label_files)_posterior_beta_time.pdf"))
+
+beta0_fixed = extract_parameter(
+    prior="beta0_fixed",
+    params_dict=params_dict,
+    samples_posterior=samples_posterior
+)
+plt = density(beta0_fixed', label=true)
+ylabel!("Density")
 
 # ------ Mirror Statistic ------
 

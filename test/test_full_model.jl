@@ -1,4 +1,4 @@
-# Test on linear model
+# Test on interactions
 using OrderedCollections
 using Distributions
 using StatsPlots
@@ -16,30 +16,46 @@ include(joinpath(abs_project_path, "src", "utils", "mixed_models_data_generation
 include(joinpath(abs_project_path, "src", "model_building", "vectorised_bijectors.jl"))
 
 
-n_individuals = 100
+n_individuals = 500
+n_time_points = 3
+p = 4
 
-p = 100
-prop_non_zero = 0.1
-p1 = Int(p * prop_non_zero)
-p0 = p - p1
-corr_factor = 0.5
+# error terms for all time points
+e = randn(n_individuals, n_time_points) * 0.5
 
-data_dict = generate_logistic_model_data(;
-    n_individuals, class_threshold=0.5f0,
-    p, p1, p0, beta_pool=Float32.([-2., 2]), obs_noise_sd=0.5, corr_factor=0.5,
-    random_seed=124, dtype=Float32
-)
+# time effect dummies - first one is the baseline intercept
+beta0 = 1.
+beta_time = [beta0, 1., 0.]
 
-n_chains = 2
+# baseline
+beta_baseline = [1., -1., 2., -1.]
+X = Float32.(randn(n_individuals, p))
+
+yt0 = beta0 .+ X * beta_baseline
+
+# time 1
+beta_int_t1 = [1., 1., 0., 0.]
+yt1 = yt0 .+ beta_time[1] .+ X * beta_int_t1
+
+# time 2
+beta_int_t2 = [1., 0., 0., 0.]
+yt2 = yt1 .+ beta_time[2] .+ X * beta_int_t2
+
+# outocome
+y = Float32.(hcat(yt0, yt1, yt2) .+ e)
+
+p_tot = p * n_time_points
+
+n_chains = 1
 num_iter = 2000
-MC_SAMPLES=2000
+MC_SAMPLES = 2000
 
 params_dict = OrderedDict()
 
 # beta 0
 update_parameters_dict(
     params_dict;
-    name="beta0",
+    name="beta0_fixed",
     dimension=(1,),
     log_prob_fun=x::Float32 -> DistributionsLogPdf.log_normal(x)
 )
@@ -48,62 +64,109 @@ update_parameters_dict(
 update_parameters_dict(
     params_dict;
     name="sigma_beta",
-    dimension=(p,),
+    dimension=(p, n_time_points),
     bij=VectorizedBijectors.softplus,
-    log_prob_fun=x::AbstractArray{Float32} -> sum(Distributions.logpdf.(
-        truncated(Cauchy(0f0, 1f0), 0f0, Inf32),
-        x
-    ))
+    log_prob_fun=x::AbstractArray{Float32} -> DistributionsLogPdf.log_half_cauchy(
+        x, sigma=Float32.(ones(p, n_time_points) * 1)
+    )
 )
 update_parameters_dict(
     params_dict;
-    name="beta",
-    dimension=(p,),
-    log_prob_fun=(x::AbstractArray{Float32}, sigma::AbstractArray{Float32}) -> DistributionsLogPdf.log_normal(x, sigma=sigma),
+    name="beta_fixed",
+    dimension=(p, n_time_points),
+    log_prob_fun=(x::AbstractArray{Float32}, sigma::AbstractArray{Float32}) -> DistributionsLogPdf.log_normal(
+        x, sigma=sigma
+    ),
     dependency=["sigma_beta"]
+)
+
+# beta time
+update_parameters_dict(
+    params_dict;
+    name="sigma_beta_time",
+    dimension=(1,),
+    bij=VectorizedBijectors.softplus,
+    log_prob_fun=x::Float32 -> DistributionsLogPdf.log_half_cauchy(
+        x, sigma=Float32(1)
+    )
+)
+update_parameters_dict(
+    params_dict;
+    name="beta_time",
+    dimension=(n_time_points,),
+    log_prob_fun=(x::AbstractArray{Float32}, sigma::Float32) -> DistributionsLogPdf.log_normal(
+        x, sigma=Float32.(ones(n_time_points)) .* sigma
+    ),
+    dependency=["sigma_beta_time"]
+)
+
+# sigma y
+update_parameters_dict(
+    params_dict;
+    name="sigma_y",
+    dimension=(1,),
+    bij=VectorizedBijectors.softplus,
+    log_prob_fun=x::Float32 -> Distributions.logpdf(
+        truncated(Normal(0f0, 0.5f0), 0f0, Inf32),
+        x
+    )
 )
 
 theta_axes, _ = get_parameters_axes(params_dict)
 
-# model predictions
-model(theta_components) = Predictors.linear_predictor(
+function linear_time_model(
+    theta_c::ComponentArray;
+    Xfix::AbstractArray
+    )
+    n, p = size(Xfix)
+    n_time = length(theta_c["beta_time"])
+
+    # baseline
+    mu_inc = [
+        theta_c["beta_time"][tt] .+ Xfix * theta_c["beta_fixed"][:, tt] for tt = 1:n_time
+    ]
+    mu = [
+        mu_inc[tt-1] .+ mu_inc[tt] for tt = 2:n_time
+    ]
+
+    sigma = [Float32.(ones(n)) .* theta_c["sigma_y"] for tt = 1:n_time]
+
+    return (hcat(mu_inc[1], mu...), hcat(sigma...))
+end
+
+model(theta_components) = linear_time_model(
     theta_components;
-    X=data_dict["X"]
+    Xfix=X
 )
-model(get_parameters_axes(params_dict)[2])
+theta_c = get_parameters_axes(params_dict)[2]
+model(theta_c)[1]
+model(theta_c)[2]
 
-DistributionsLogPdf.log_bernoulli_from_logit(
-    data_dict["y"],
-    model(get_parameters_axes(params_dict)[2])...
-)
+DistributionsLogPdf.log_normal(y, model(theta_c)...)
 
-# model
+# model log joint
 partial_log_joint(theta) = log_joint(
     theta;
     params_dict=params_dict,
     theta_axes=theta_axes,
     model=model,
-    log_likelihood=DistributionsLogPdf.log_bernoulli_from_logit,
-    label=data_dict["y"]
+    log_likelihood=DistributionsLogPdf.log_normal,
+    label=y
 )
-partial_log_joint(Float32.(randn(params_dict["tot_params"])))
+theta = Float32.(ones(params_dict["tot_params"]))
+partial_log_joint(Float32.(ones(params_dict["tot_params"])))
 
 # VI distribution
 vi_dist(z::AbstractArray) = VariationalDistributions.meanfield(z, tot_params=params_dict["tot_params"])
-
-# LR
-scatter(cyclical_polynomial_decay(num_iter, 4))
-n_chains = 1
 
 # Training
 res = training_loop(;
     log_joint=partial_log_joint,
     vi_dist=vi_dist,
     z_dim=params_dict["tot_params"]*2,
-    n_iter=num_iter,
+    n_iter=2000,
     n_chains=n_chains,
     samples_per_step=2,
-    sd_init=0.5f0,
     use_noisy_grads=false,
     n_cycles=1
 )
@@ -121,13 +184,37 @@ samples_posterior = posterior_samples(
     params_dict=params_dict,
     n_samples=MC_SAMPLES
 )
+
 beta_samples = extract_parameter(
-    prior="beta",
+    prior="beta_fixed",
     params_dict=params_dict,
     samples_posterior=samples_posterior
 )
+# beta baseline
+plt = density(beta_samples[1:p, :]', label=true)
+beta_baseline
 
-plt = density(beta_samples', label=false)
+plt = density(beta_samples[p+1:2*p, :]', label=true)
+beta_int_t1
+
+plt = density(beta_samples[2*p+1:p*3, :]', label=true)
+beta_int_t2
+
+
+beta0_samples = extract_parameter(
+    prior="beta0_fixed",
+    params_dict=params_dict,
+    samples_posterior=samples_posterior
+)
+plt = density(beta0_samples', label=false)
+
+beta_time_samples = extract_parameter(
+    prior="beta_time",
+    params_dict=params_dict,
+    samples_posterior=samples_posterior
+)
+plt = density(beta_time_samples', label=true)
+beta_time
 
 # Mirror Statistic
 ms_dist = MirrorStatistic.posterior_ms_coefficients(
