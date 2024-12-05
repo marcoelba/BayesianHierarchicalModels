@@ -226,10 +226,17 @@ scatter!(
 
 # ---------------------------------------------------------
 # Predictions
+selection0 = (selection .== 0)
+beta_range = collect(params_dict["priors"]["beta_fixed"]["range"])
+
 obs = 10
 mu_pred = []
+
 for theta in eachcol(samples_posterior)
-    theta_components = ComponentArray(theta, theta_axes)
+    t_temp = copy(theta)
+    t_temp[beta_range[selection0]] .= 0.
+    theta_components = ComponentArray(t_temp, theta_axes)
+
     lin_pred = Predictors.linear_time_model(
         theta_components;
         X=data_dict["Xfix"][obs:obs, :]
@@ -242,7 +249,11 @@ mu_pred = vcat(mu_pred...)
 plot(mu_pred', label=false, color="lightgrey")
 plot!(data_dict["y"][obs, :], linewidth=3, col=2, label="True")
 
-mean_components = ComponentArray(mean(samples_posterior, dims=2)[:, 1], theta_axes)
+# with the mean
+mean_posterior = mean(samples_posterior, dims=2)[:, 1]
+mean_posterior[beta_range[selection0]] .= 0.
+
+mean_components = ComponentArray(mean_posterior, theta_axes)
 lin_pred = Predictors.linear_time_model(
     mean_components;
     X=data_dict["Xfix"]
@@ -258,19 +269,3 @@ plot!(data_dict["y"][1, :])
 
 plot(mu_pred[3, :])
 plot!(data_dict["y"][3, :])
-
-
-# LASSO
-using GLMNet
-
-y_q = []
-for yi in data_dict["y"]
-    if yi == 1
-        push!(y_q, "yes")
-    else
-        push!(y_q, "no")
-    end
-end
-
-lasso_cv = glmnetcv(data_dict["X"], y_q)
-lasso_cv.path
