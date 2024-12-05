@@ -18,31 +18,30 @@ include(joinpath(abs_project_path, "src", "model_building", "vectorised_bijector
 
 n_individuals = 500
 n_time_points = 3
-p = 4
-
-# error terms for all time points
-e = randn(n_individuals, n_time_points) * 0.5
+p = 500
+p1 = Int(p * 0.05)
+p0 = p - p1
 
 # time effect dummies - first one is the baseline intercept
-beta0 = 1.
-beta_time = [beta0, 1., 0.]
+beta_time = [1., 1., 0.]
+beta_time_int = hcat(
+    vcat(zeros(p - 2), ones(2)),
+    zeros(p)
+)
 
-# baseline
-beta_baseline = [1., -1., 2., -1.]
-X = Float32.(randn(n_individuals, p))
-
-yt0 = beta0 .+ X * beta_baseline
-
-# time 1
-beta_int_t1 = [1., 1., 0., 0.]
-yt1 = yt0 .+ beta_time[1] .+ X * beta_int_t1
-
-# time 2
-beta_int_t2 = [1., 0., 0., 0.]
-yt2 = yt1 .+ beta_time[2] .+ X * beta_int_t2
-
-# outocome
-y = Float32.(hcat(yt0, yt1, yt2) .+ e)
+data_dict = generate_time_interaction_model_data(
+    n_individuals=n_individuals,
+    n_time_points=n_time_points,
+    p=p, p1=p1, p0=p0,
+    beta_pool=Float32.([-1., -2., 1, 2]),
+    obs_noise_sd=0.5,
+    corr_factor=0.5,
+    include_random_int=false, random_int_from_pool=true,
+    beta_time=beta_time,
+    beta_time_int=beta_time_int,
+    random_seed=124,
+    dtype=Float32
+)
 
 p_tot = p * n_time_points
 
@@ -52,14 +51,6 @@ MC_SAMPLES = 2000
 
 params_dict = OrderedDict()
 
-# beta 0
-update_parameters_dict(
-    params_dict;
-    name="beta0_fixed",
-    dimension=(1,),
-    log_prob_fun=x::Float32 -> DistributionsLogPdf.log_normal(x)
-)
-
 # beta fixed
 update_parameters_dict(
     params_dict;
@@ -67,7 +58,7 @@ update_parameters_dict(
     dimension=(p, n_time_points),
     bij=VectorizedBijectors.softplus,
     log_prob_fun=x::AbstractArray{Float32} -> DistributionsLogPdf.log_half_cauchy(
-        x, sigma=Float32.(ones(p, n_time_points) * 1)
+        x, sigma=Float32.(ones(p, n_time_points) .* [1, 0.1, 0.1]')
     )
 )
 update_parameters_dict(
@@ -114,35 +105,16 @@ update_parameters_dict(
 
 theta_axes, _ = get_parameters_axes(params_dict)
 
-function linear_time_model(
-    theta_c::ComponentArray;
-    Xfix::AbstractArray
-    )
-    n, p = size(Xfix)
-    n_time = length(theta_c["beta_time"])
 
-    # baseline
-    mu_inc = [
-        theta_c["beta_time"][tt] .+ Xfix * theta_c["beta_fixed"][:, tt] for tt = 1:n_time
-    ]
-    mu = [
-        mu_inc[tt-1] .+ mu_inc[tt] for tt = 2:n_time
-    ]
-
-    sigma = [Float32.(ones(n)) .* theta_c["sigma_y"] for tt = 1:n_time]
-
-    return (hcat(mu_inc[1], mu...), hcat(sigma...))
-end
-
-model(theta_components) = linear_time_model(
+model(theta_components) = Predictors.linear_time_model(
     theta_components;
-    Xfix=X
+    X=data_dict["Xfix"]
 )
 theta_c = get_parameters_axes(params_dict)[2]
 model(theta_c)[1]
 model(theta_c)[2]
 
-DistributionsLogPdf.log_normal(y, model(theta_c)...)
+DistributionsLogPdf.log_normal(data_dict["y"], model(theta_c)...)
 
 # model log joint
 partial_log_joint(theta) = log_joint(
@@ -151,7 +123,7 @@ partial_log_joint(theta) = log_joint(
     theta_axes=theta_axes,
     model=model,
     log_likelihood=DistributionsLogPdf.log_normal,
-    label=y
+    label=data_dict["y"]
 )
 theta = Float32.(ones(params_dict["tot_params"]))
 partial_log_joint(Float32.(ones(params_dict["tot_params"])))
@@ -171,7 +143,7 @@ res = training_loop(;
     n_cycles=1
 )
 
-plot(res["elbo_trace"][100:end, :])
+plot(res["elbo_trace"][1:end, :])
 plot(res["elbo_trace"][3000:end, :])
 
 vi_posterior = average_posterior(
@@ -191,22 +163,14 @@ beta_samples = extract_parameter(
     samples_posterior=samples_posterior
 )
 # beta baseline
-plt = density(beta_samples[1:p, :]', label=true)
-beta_baseline
+plt = density(beta_samples[1:p, :]', label=false)
+data_dict["beta_fixed"]
 
-plt = density(beta_samples[p+1:2*p, :]', label=true)
-beta_int_t1
+plt = density(beta_samples[p+1:2*p, :]', label=false)
+beta_time_int
 
 plt = density(beta_samples[2*p+1:p*3, :]', label=true)
-beta_int_t2
-
-
-beta0_samples = extract_parameter(
-    prior="beta0_fixed",
-    params_dict=params_dict,
-    samples_posterior=samples_posterior
-)
-plt = density(beta0_samples', label=false)
+beta_time_int
 
 beta_time_samples = extract_parameter(
     prior="beta_time",
@@ -219,7 +183,7 @@ beta_time
 # Mirror Statistic
 ms_dist = MirrorStatistic.posterior_ms_coefficients(
     vi_posterior=vi_posterior,
-    prior="beta",
+    prior="beta_fixed",
     params_dict=params_dict
 )
 plt = density(rand(ms_dist, MC_SAMPLES)', label=false)
@@ -227,14 +191,11 @@ plt = density(rand(ms_dist, MC_SAMPLES)', label=false)
 metrics = MirrorStatistic.optimal_inclusion(
     ms_dist_vec=ms_dist,
     mc_samples=MC_SAMPLES,
-    beta_true=data_dict["beta"],
+    beta_true=vcat(data_dict["beta_fixed"]...),
     fdr_target=0.1
 )
 
 # distribution
-boxplot(metrics.fdr_distribution, label="FDR")
-boxplot!(metrics.tpr_distribution, label="TPR")
-
 plt = fdr_n_hist(metrics)
 
 # Newton's rule
@@ -248,7 +209,7 @@ c_opt, selection = MirrorStatistic.posterior_fdr_threshold(
 sum((1 .- mean_inclusion_per_coef) .<= c_opt)
 
 metrics = MirrorStatistic.wrapper_metrics(
-    data_dict["beta"] .!= 0.,
+    vcat(data_dict["beta_fixed"]...) .!= 0.,
     selection
 )
 
@@ -263,15 +224,40 @@ scatter!(
     label="Selected", markersize=5,
 )
 
+# ---------------------------------------------------------
+# Predictions
+obs = 10
+mu_pred = []
+for theta in eachcol(samples_posterior)
+    theta_components = ComponentArray(theta, theta_axes)
+    lin_pred = Predictors.linear_time_model(
+        theta_components;
+        X=data_dict["Xfix"][obs:obs, :]
+    )
+    push!(mu_pred, lin_pred[1])
+    sigma = lin_pred[2]
+end
 
-# range
-metrics.metrics_mean
-metrics.metrics_median
-scatter(sort(unique(metrics.n_inclusion_per_mc)), metrics.fdr_range)
-scatter!(sort(unique(metrics.n_inclusion_per_mc)), metrics.tpr_range)
+mu_pred = vcat(mu_pred...)
+plot(mu_pred', label=false, color="lightgrey")
+plot!(data_dict["y"][obs, :], linewidth=3, col=2, label="True")
 
+mean_components = ComponentArray(mean(samples_posterior, dims=2)[:, 1], theta_axes)
+lin_pred = Predictors.linear_time_model(
+    mean_components;
+    X=data_dict["Xfix"]
+)
+mu_pred = lin_pred[1]
+sigma_pred = lin_pred[2]
 
-plt = scatter_sel_matrix(metrics.inclusion_matrix, p0=p0)
+plot(mu_pred[2, :])
+plot!(data_dict["y"][2, :])
+
+plot(mu_pred[1, :])
+plot!(data_dict["y"][1, :])
+
+plot(mu_pred[3, :])
+plot!(data_dict["y"][3, :])
 
 
 # LASSO
