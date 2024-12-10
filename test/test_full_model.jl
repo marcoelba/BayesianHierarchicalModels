@@ -18,15 +18,19 @@ include(joinpath(abs_project_path, "src", "model_building", "vectorised_bijector
 
 n_individuals = 500
 n_time_points = 3
-p = 500
+p = 1500
 p1 = Int(p * 0.05)
 p0 = p - p1
 
 # time effect dummies - first one is the baseline intercept
-beta_time = [1., 1., 0.]
+beta_time = [1., 1., 2.]
+
+p_int_t2 = 10
+p_int_t3 = 5
+
 beta_time_int = hcat(
-    vcat(zeros(p - 2), ones(2)),
-    zeros(p)
+    vcat(zeros(p - p_int_t2), ones(p_int_t2)),
+    vcat(zeros(p - p_int_t3), ones(p_int_t3))
 )
 
 data_dict = generate_time_interaction_model_data(
@@ -58,7 +62,7 @@ update_parameters_dict(
     dimension=(p, n_time_points),
     bij=VectorizedBijectors.softplus,
     log_prob_fun=x::AbstractArray{Float32} -> DistributionsLogPdf.log_half_cauchy(
-        x, sigma=Float32.(ones(p, n_time_points) .* [1, 0.1, 0.1]')
+        x, sigma=Float32.(ones(p, n_time_points) .* [1, 1, 1]')
     )
 )
 update_parameters_dict(
