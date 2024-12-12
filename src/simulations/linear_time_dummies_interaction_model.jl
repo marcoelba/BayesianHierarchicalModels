@@ -1,4 +1,4 @@
-# Test on interactions
+# Linear time dummies model
 using OrderedCollections
 using Distributions
 using StatsPlots
@@ -17,17 +17,7 @@ include(joinpath(abs_project_path, "src", "model_building", "vectorised_bijector
 
 
 n_individuals = 100
-n_repetitions = 10
-
-#
-beta0 = 1.
-u0 = randn(n_individuals) * 5.
-
-y = Float32.(beta0 .+ u0 .+ randn(n_individuals, n_repetitions) * 0.5)
-mean(y)
-mean(y, dims=2)
-cor(y)
-
+n_time_points = 5
 p = 100
 p1 = Int(p * 0.1)
 p0 = p - p1
@@ -54,8 +44,7 @@ data_dict = generate_time_interaction_model_data(
     beta_pool=Float32.([-1., -2., 1, 2]),
     obs_noise_sd=0.5,
     corr_factor=0.5,
-    include_random_int=true, random_int_from_pool=false,
-    random_intercept_sd=1.,
+    include_random_int=false, random_int_from_pool=true,
     beta_time=beta_time,
     beta_time_int=beta_time_int,
     random_seed=124,
@@ -70,35 +59,6 @@ num_iter = 2000
 MC_SAMPLES = 2000
 
 params_dict = OrderedDict()
-
-update_parameters_dict(
-    params_dict;
-    name="beta0_fixed",
-    dimension=(1, ),
-    log_prob_fun=x::Float32 -> DistributionsLogPdf.log_normal(
-        x
-    )
-)
-
-# Random intercept beta0
-update_parameters_dict(
-    params_dict;
-    name="sigma_beta0",
-    dimension=(1, ),
-    bij=VectorizedBijectors.softplus,
-    log_prob_fun=x::Float32 -> DistributionsLogPdf.log_half_cauchy(
-        x, sigma=Float32.(1)
-    )
-)
-update_parameters_dict(
-    params_dict;
-    name="beta0_random",
-    dimension=(n_individuals,),
-    log_prob_fun=(x::AbstractArray{Float32}, sigma::Float32) -> DistributionsLogPdf.log_normal(
-        x, sigma=Float32.(ones(n_individuals) * sigma)
-    ),
-    dependency=["sigma_beta0"]
-)
 
 # beta fixed
 update_parameters_dict(
@@ -155,16 +115,15 @@ update_parameters_dict(
 theta_axes, _ = get_parameters_axes(params_dict)
 
 
-model(theta_components) = Predictors.random_intercept_model(
+model(theta_components) = Predictors.linear_time_model(
     theta_components;
-    n_individuals=n_individuals,
-    n_repetitions=n_repetitions
+    X=data_dict["Xfix"]
 )
 theta_c = get_parameters_axes(params_dict)[2]
 model(theta_c)[1]
 model(theta_c)[2]
 
-DistributionsLogPdf.log_normal(y, model(theta_c)...)
+DistributionsLogPdf.log_normal(data_dict["y"], model(theta_c)...)
 
 # model log joint
 partial_log_joint(theta) = log_joint(
@@ -173,7 +132,7 @@ partial_log_joint(theta) = log_joint(
     theta_axes=theta_axes,
     model=model,
     log_likelihood=DistributionsLogPdf.log_normal,
-    label=y
+    label=data_dict["y"]
 )
 theta = Float32.(ones(params_dict["tot_params"]))
 partial_log_joint(Float32.(ones(params_dict["tot_params"])))
@@ -229,38 +188,6 @@ beta_time_samples = extract_parameter(
 )
 plt = density(beta_time_samples', label=true)
 beta_time
-
-# beta0 random int
-beta0_fixed = extract_parameter(
-    prior="beta0_fixed",
-    params_dict=params_dict,
-    samples_posterior=samples_posterior
-)
-plt = density(beta0_fixed', label=true)
-
-
-# beta0 random int
-beta0_random = extract_parameter(
-    prior="beta0_random",
-    params_dict=params_dict,
-    samples_posterior=samples_posterior
-)
-plt = density(beta0_random', label=true)
-
-# beta0 random int
-sigma_beta0 = extract_parameter(
-    prior="sigma_beta0",
-    params_dict=params_dict,
-    samples_posterior=samples_posterior
-)
-plt = density(sigma_beta0', label=true)
-
-mu_beta0 = extract_parameter(
-    prior="mu_beta0",
-    params_dict=params_dict,
-    samples_posterior=samples_posterior
-)
-plt = density(mu_beta0', label=true)
 
 # Mirror Statistic
 ms_dist = MirrorStatistic.posterior_ms_coefficients(

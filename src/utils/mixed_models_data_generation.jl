@@ -179,7 +179,59 @@ function generate_time_interaction_model_data(;
     n_individuals, n_time_points,
     p, p1, p0, beta_pool=Float32.([-1., -2., 1, 2]),
     obs_noise_sd=1., corr_factor=0.5,
-    include_random_int=false, random_int_from_pool=true,
+    beta_time=Float32.(range(0, 1., length=n_time_points)),
+    beta_time_int=zeros(p, n_time_points - 1),
+    random_seed=124, dtype=Float32
+    )
+
+    data_dict = Dict()
+
+    Random.seed!(random_seed)
+
+    # > FIXED EFFETCS <
+    # Fixed effects
+    # block covariance matrix
+    cor_coefs_0 = vcat([1.], [corr_factor * (p0 - ll) / (p0 - 1) for ll in range(1, p0-1)])
+    cor_coefs_1 = vcat([1.], [corr_factor * (p1 - ll) / (p1 - 1) for ll in range(1, p1-1)])
+    cov_matrix_0 = Array(Toeplitz(cor_coefs_0, cor_coefs_0))
+    cov_matrix_1 = Array(Toeplitz(cor_coefs_1, cor_coefs_1))
+
+    Xfix_0 = rand(MultivariateNormal(cov_matrix_0), n_individuals)
+    Xfix_1 = rand(MultivariateNormal(cov_matrix_1), n_individuals)
+    Xfix = transpose(vcat(Xfix_0, Xfix_1))
+
+    data_dict["Xfix"] = dtype.(Xfix)
+
+    # Fixed Regression Coeffcients
+    beta_baseline = dtype.(vcat(zeros(p0), Random.rand(beta_pool, p1)))
+
+    beta_time_int = dtype.(beta_time_int)
+
+    beta_fixed = hcat(beta_baseline, beta_time_int)
+
+    data_dict["beta_fixed"] = beta_fixed
+        
+    # Time effect - first element is the baseline intercept
+    data_dict["beta_time"] = beta_time
+    
+    # Outcome
+    mu_inc = [
+        beta_time[tt] .+ Xfix * beta_fixed[:, tt] for tt = 1:n_time_points
+    ]    
+    mu = cumsum(reduce(hcat, mu_inc), dims=2)
+
+    y = dtype.(mu .+ Random.randn(n_individuals, n_time_points) * obs_noise_sd)    
+    data_dict["y"] = y
+
+    return data_dict
+end
+
+
+function generate_time_interaction_multiple_measurements_data(;
+    n_individuals, n_time_points, n_measurements,
+    p, p1, p0, beta_pool=Float32.([-1., -2., 1, 2]),
+    obs_noise_sd=1., corr_factor=0.5,
+    include_random_int=false, random_int_from_pool=false,
     random_intercept_sd=0.3, beta0_pool=Float32.([-2, -1.5, -0.5, 0, 0.5, 1.5, 2]),
     beta_time=Float32.(range(0, 1., length=n_time_points)),
     beta_time_int=zeros(p, n_time_points - 1),
@@ -191,7 +243,7 @@ function generate_time_interaction_model_data(;
     Random.seed!(random_seed)
 
     # > FIXED EFFETCS <
-    # Fixed effects, baseline covariates (DO NOT change over time)
+    # Fixed effects
     # block covariance matrix
     cor_coefs_0 = vcat([1.], [corr_factor * (p0 - ll) / (p0 - 1) for ll in range(1, p0-1)])
     cor_coefs_1 = vcat([1.], [corr_factor * (p1 - ll) / (p1 - 1) for ll in range(1, p1-1)])
@@ -231,6 +283,10 @@ function generate_time_interaction_model_data(;
     mu_inc = [
         beta_time[tt] .+ Xfix * beta_fixed[:, tt] for tt = 1:n_time_points
     ]
+    if include_random_int
+        mu_inc[1] = mu_inc[1] .+ data_dict["beta0_random"]
+    end
+    
     mu = cumsum(reduce(hcat, mu_inc), dims=2)
 
     y = dtype.(mu .+ Random.randn(n_individuals, n_time_points) * obs_noise_sd)    
@@ -238,3 +294,4 @@ function generate_time_interaction_model_data(;
 
     return data_dict
 end
+
