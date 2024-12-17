@@ -106,7 +106,7 @@ function get_parameters_axes(params_dict)
 end
 
 
-function log_joint(theta; params_dict, theta_axes, model, log_likelihood, label)
+function log_joint(theta; params_dict, theta_axes, model, log_likelihood, label, n_repeated_measures=1)
 
     priors = params_dict["priors"]
     bijectors = params_dict["bijectors"]
@@ -119,11 +119,15 @@ function log_joint(theta; params_dict, theta_axes, model, log_likelihood, label)
     # parameters extraction
     theta_components = ComponentArray(theta_transformed, theta_axes)
 
-    predictions = model(
-        theta_components
-    )
+    loglik = 0f0
+    for rep = 1:n_repeated_measures
+        predictions = model(
+            theta_components,
+            rep
+        )
 
-    loglik = sum(log_likelihood(label, predictions...))
+        loglik += sum(log_likelihood(label, predictions...))
+    end
 
     # log prior
     log_prior = 0f0

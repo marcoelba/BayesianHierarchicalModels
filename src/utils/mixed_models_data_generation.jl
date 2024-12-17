@@ -265,7 +265,7 @@ function generate_time_interaction_multiple_measurements_data(;
 
     data_dict["beta_fixed"] = beta_fixed
     
-    # > RANDOM EFFETCS <    
+    # > RANDOM EFFETCS <
     # Random Intercept (one per individual)
     if include_random_int
         if random_int_from_pool
@@ -289,7 +289,7 @@ function generate_time_interaction_multiple_measurements_data(;
     
     mu = cumsum(reduce(hcat, mu_inc), dims=2)
 
-    y = dtype.(mu .+ Random.randn(n_individuals, n_time_points) * obs_noise_sd)    
+    y = dtype.(mu .+ Random.randn(n_individuals, n_time_points) * obs_noise_sd)
     data_dict["y"] = y
 
     return data_dict
