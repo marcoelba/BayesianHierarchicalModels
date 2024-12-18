@@ -228,12 +228,12 @@ end
 
 
 function generate_time_interaction_multiple_measurements_data(;
-    n_individuals, n_time_points, n_measurements,
+    n_individuals, n_time_points, n_repeated_measures,
     p, p1, p0, beta_pool=Float32.([-1., -2., 1, 2]),
     obs_noise_sd=1., corr_factor=0.5,
     include_random_int=false, random_int_from_pool=false,
     random_intercept_sd=0.3, beta0_pool=Float32.([-2, -1.5, -0.5, 0, 0.5, 1.5, 2]),
-    beta_time=Float32.(range(0, 1., length=n_time_points)),
+    beta_time=Float32.(ones(n_time_points, n_repeated_measures)),
     beta_time_int=zeros(p, n_time_points - 1),
     random_seed=124, dtype=Float32
     )
@@ -242,7 +242,6 @@ function generate_time_interaction_multiple_measurements_data(;
 
     Random.seed!(random_seed)
 
-    # > FIXED EFFETCS <
     # Fixed effects
     # block covariance matrix
     cor_coefs_0 = vcat([1.], [corr_factor * (p0 - ll) / (p0 - 1) for ll in range(1, p0-1)])
@@ -256,13 +255,16 @@ function generate_time_interaction_multiple_measurements_data(;
 
     data_dict["Xfix"] = dtype.(Xfix)
 
-    # Fixed Regression Coeffcients
-    beta_baseline = dtype.(vcat(zeros(p0), Random.rand(beta_pool, p1)))
-
-    beta_time_int = dtype.(beta_time_int)
-
-    beta_fixed = hcat(beta_baseline, beta_time_int)
-
+    # beta fixed
+    beta_fixed = zeros(p, n_time_points, n_repeated_measures)
+    active_coefficients = Random.rand(beta_pool, p1)
+    for rep = 1:n_repeated_measures
+        beta_baseline = dtype.(vcat(
+            zeros(p0), active_coefficients .+ randn(p1) * 0.1
+        ))
+        beta_time_int = dtype.(beta_time_int)
+        beta_fixed[:, :, rep] = hcat(beta_baseline, beta_time_int)
+    end
     data_dict["beta_fixed"] = beta_fixed
     
     # > RANDOM EFFETCS <
@@ -279,17 +281,22 @@ function generate_time_interaction_multiple_measurements_data(;
     # Time effect - first element is the baseline intercept
     data_dict["beta_time"] = beta_time
     
-    # Outcome
-    mu_inc = [
-        beta_time[tt] .+ Xfix * beta_fixed[:, tt] for tt = 1:n_time_points
-    ]
-    if include_random_int
-        mu_inc[1] = mu_inc[1] .+ data_dict["beta0_random"]
+    # Predictor
+    array_mu = zeros(n_individuals, n_time_points, n_repeated_measures)
+    for rep = 1:n_repeated_measures
+    
+        mu_baseline = beta_time[1, rep] .+ beta0_random .+ Xfix * beta_fixed[:, 1, rep]
+    
+        mu_inc = [
+            ones(n_individuals) .* beta_time[tt, rep] .+ Xfix * beta_fixed[:, tt, rep] for tt = 2:n_time_points
+        ]
+        mu_matrix = reduce(hcat, [mu_baseline, reduce(hcat, mu_inc)])
+        mu = cumsum(mu_matrix, dims=2)
+    
+        array_mu[:, :, rep] = mu
     end
     
-    mu = cumsum(reduce(hcat, mu_inc), dims=2)
-
-    y = dtype.(mu .+ Random.randn(n_individuals, n_time_points) * obs_noise_sd)
+    y = dtype.(array_mu .+ Random.randn(n_individuals, n_time_points, n_repeated_measures) * obs_noise_sd)
     data_dict["y"] = y
 
     return data_dict

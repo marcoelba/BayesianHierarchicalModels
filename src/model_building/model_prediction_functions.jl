@@ -76,15 +76,16 @@ end
 
 function linear_time_random_intercept_model(
     theta_c::ComponentArray,
-    rep_number::Int64;
+    rep_index::Int64;
+    X::AbstractArray,
     n_individuals::Int64,
     n_time_points::Int64
     )
 
     # baseline
-    mu_baseline = theta_c["beta_time"][1, rep_number] .+ theta_c["beta0_random"]
+    mu_baseline = theta_c["beta_time"][1, rep_index] .+ theta_c["beta0_random"] .+ X * theta_c["beta_fixed"][:, 1, rep_index]
     mu_inc = [
-        Float32.(ones(n_individuals)) .* theta_c["beta_time"][tt, rep_number] for tt = 2:n_time_points
+        Float32.(ones(n_individuals)) .* theta_c["beta_time"][tt, rep_index] .+ X * theta_c["beta_fixed"][:, tt, rep_index] for tt = 2:n_time_points
     ]
     
     mu_matrix = reduce(hcat, [mu_baseline, reduce(hcat, mu_inc)])

@@ -20,6 +20,21 @@ n_individuals = 100
 n_repetitions = 5
 n_time_points = 4
 
+p = 10
+p1 = Int(p * 0.5)
+p0 = p - p1
+p_tot = p * n_time_points
+
+p_int_t2 = 0
+p_int_t3 = 0
+p_int_t4 = 0
+
+beta_time_int = hcat(
+    vcat(zeros(p - p_int_t2), ones(p_int_t2)),
+    vcat(zeros(p - p_int_t3), ones(p_int_t3)),
+    vcat(zeros(p - p_int_t4), ones(p_int_t4))
+)
+
 # Intercept - Fixed effect
 beta0 = 1.
 # Intercept - Random effects
@@ -29,13 +44,30 @@ u0 = randn(n_individuals) * 5.
 beta_time = [beta0, 1., 2., 0.]
 beta_time = beta_time .+ randn(n_time_points, n_repetitions) * 0.05
 
+# Fixed Regression Coeffcients
+beta_fixed = zeros(p, n_time_points, n_repetitions)
+active_coefficients = Random.rand([-2, 2], p1)
+
+for rep = 1:n_repetitions
+    beta_baseline = Float32.(vcat(
+        zeros(p0), active_coefficients .+ randn(p1) * 0.1
+    ))
+
+    beta_time_int = Float32.(beta_time_int)
+    
+    beta_fixed[:, :, rep] = hcat(beta_baseline, beta_time_int)
+end
+
+Xfix = randn(n_individuals, p)
+
+# Array over multiple measurements
 array_mu = zeros(n_individuals, n_time_points, n_repetitions)
 for rep = 1:n_repetitions
 
-    mu_baseline = beta_time[1, rep] .+ u0
+    mu_baseline = beta_time[1, rep] .+ u0 .+ Xfix * beta_fixed[:, 1, rep]
 
     mu_inc = [
-        ones(n_individuals) .* beta_time[tt, rep] for tt = 2:n_time_points
+        ones(n_individuals) .* beta_time[tt, rep] .+ Xfix * beta_fixed[:, tt, rep] for tt = 2:n_time_points
     ]
     mu_matrix = reduce(hcat, [mu_baseline, reduce(hcat, mu_inc)])
     mu = cumsum(mu_matrix, dims=2)
@@ -59,42 +91,32 @@ end
 display(plt)
 
 
-p = 100
-p1 = Int(p * 0.1)
-p0 = p - p1
-
-# time effect dummies - first one is the baseline intercept
-beta_time = [1., 1., 2., 1., 0.]
-
-p_int_t2 = 10
-p_int_t3 = 5
-p_int_t4 = 5
-p_int_t5 = 0
-
-beta_time_int = hcat(
-    vcat(zeros(p - p_int_t2), ones(p_int_t2)),
-    vcat(zeros(p - p_int_t3), ones(p_int_t3)),
-    vcat(zeros(p - p_int_t4), ones(p_int_t4)),
-    vcat(zeros(p - p_int_t5), ones(p_int_t5))
-)
-
-data_dict = generate_time_interaction_model_data(
+data_dict = generate_time_interaction_multiple_measurements_data(
     n_individuals=n_individuals,
     n_time_points=n_time_points,
+    n_repeated_measures=n_repetitions,
     p=p, p1=p1, p0=p0,
     beta_pool=Float32.([-1., -2., 1, 2]),
     obs_noise_sd=0.5,
     corr_factor=0.5,
     include_random_int=true, random_int_from_pool=false,
-    random_intercept_sd=1.,
+    random_intercept_sd=2.,
     beta_time=beta_time,
-    beta_time_int=beta_time_int,
     random_seed=124,
     dtype=Float32
 )
 
-p_tot = p * n_time_points
-sigma_beta_prior = [1, 1, 1, 1, 1]
+plt = plot()
+for ii = 1:n_individuals
+    plot!(data_dict["y"][ii, :, 1], label=false)
+end
+display(plt)
+
+plt = plot()
+for ii = 1:n_repetitions
+    plot!(data_dict["y"][1, :, ii], label=false)
+end
+display(plt)
 
 #
 n_chains = 1
@@ -133,23 +155,39 @@ update_parameters_dict(
 )
 
 # beta fixed
+# hierarchical prior
+
+# group prior on the mean
 update_parameters_dict(
     params_dict;
-    name="sigma_beta",
+    name="sigma_beta_group",
     dimension=(p, n_time_points),
     bij=VectorizedBijectors.softplus,
     log_prob_fun=x::AbstractArray{Float32} -> DistributionsLogPdf.log_half_cauchy(
-        x, sigma=Float32.(ones(p, n_time_points) .* sigma_beta_prior')
+        x, sigma=Float32.(ones(p, n_time_points))
     )
 )
 update_parameters_dict(
     params_dict;
-    name="beta_fixed",
+    name="beta_group",
     dimension=(p, n_time_points),
     log_prob_fun=(x::AbstractArray{Float32}, sigma::AbstractArray{Float32}) -> DistributionsLogPdf.log_normal(
         x, sigma=sigma
     ),
-    dependency=["sigma_beta"]
+    dependency=["sigma_beta_group"]
+)
+
+# prior over repeated measurements
+update_parameters_dict(
+    params_dict;
+    name="beta_fixed",
+    dimension=(p, n_time_points, n_repetitions),
+    log_prob_fun=(x::AbstractArray{Float32}, mu::AbstractArray{Float32}) -> DistributionsLogPdf.log_normal(
+        x,
+        mu=mu .* Float32.(ones(p, n_time_points, n_repetitions)),
+        sigma=Float32.(ones(p, n_time_points, n_repetitions))
+    ),
+    dependency=["beta_group"]
 )
 
 # beta time
@@ -196,9 +234,10 @@ update_parameters_dict(
 theta_axes, _ = get_parameters_axes(params_dict)
 
 
-model(theta_components, n_rep) = Predictors.linear_time_random_intercept_model(
+model(theta_components, rep_index) = Predictors.linear_time_random_intercept_model(
     theta_components,
-    n_rep,
+    rep_index,
+    X=data_dict["Xfix"],
     n_individuals=n_individuals,
     n_time_points=n_time_points,
 )
@@ -211,6 +250,7 @@ loglik = 0f0
 for rep = 1:n_repetitions
     loglik += sum(DistributionsLogPdf.log_normal(y[:, :, rep], model(theta_c, rep)...))
 end
+loglik
 
 # model log joint
 partial_log_joint(theta) = log_joint(
@@ -254,6 +294,16 @@ samples_posterior = posterior_samples(
     n_samples=MC_SAMPLES
 )
 
+# hyperprior on beta - mu
+beta_group_samples = extract_parameter(
+    prior="beta_group",
+    params_dict=params_dict,
+    samples_posterior=samples_posterior
+)
+# beta baseline
+plt = density(beta_group_samples', label=false)
+data_dict["beta_fixed"][:, :, 1]
+
 beta_samples = extract_parameter(
     prior="beta_fixed",
     params_dict=params_dict,
@@ -285,6 +335,7 @@ mu_beta_time_samples = extract_parameter(
 plt = density(mu_beta_time_samples', label=true)
 beta_time
 
+
 # beta0 random int
 beta0_fixed = extract_parameter(
     prior="beta0_fixed",
@@ -309,6 +360,14 @@ sigma_beta0 = extract_parameter(
     samples_posterior=samples_posterior
 )
 plt = density(sigma_beta0', label=true)
+
+# sigma y
+sigma_y = extract_parameter(
+    prior="sigma_y",
+    params_dict=params_dict,
+    samples_posterior=samples_posterior
+)
+plt = density(sigma_y', label=true)
 
 
 # Mirror Statistic
