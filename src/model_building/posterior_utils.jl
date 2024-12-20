@@ -29,7 +29,11 @@ function average_posterior(dict_posteriors::Dict, distribution_type)
 end
 
 
-function posterior_samples(; vi_posterior::Distributions.Distribution, params_dict::OrderedDict, n_samples::Int64=1)
+function posterior_samples(;
+    vi_posterior::Distributions.Distribution,
+    params_dict::OrderedDict,
+    n_samples::Int64=1
+    )
 
     raw_sample = rand(vi_posterior, n_samples)
 

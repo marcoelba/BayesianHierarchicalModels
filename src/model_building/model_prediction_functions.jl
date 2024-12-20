@@ -77,10 +77,10 @@ end
 function linear_time_random_intercept_model(
     theta_c::ComponentArray,
     rep_index::Int64;
-    X::AbstractArray,
-    n_individuals::Int64,
-    n_time_points::Int64
+    X::AbstractArray
     )
+    n_individuals, p = size(X)
+    n_time_points = size(theta_c["beta_time"], 1)
 
     # baseline
     mu_baseline = theta_c["beta_time"][1, rep_index] .+ theta_c["beta0_random"] .+ X * theta_c["beta_fixed"][:, 1, rep_index]

@@ -20,8 +20,8 @@ n_individuals = 100
 n_repetitions = 5
 n_time_points = 4
 
-p = 10
-p1 = Int(p * 0.5)
+p = 100
+p1 = Int(p * 0.1)
 p0 = p - p1
 p_tot = p * n_time_points
 
@@ -43,53 +43,6 @@ u0 = randn(n_individuals) * 5.
 # Time dummy effect
 beta_time = [beta0, 1., 2., 0.]
 beta_time = beta_time .+ randn(n_time_points, n_repetitions) * 0.05
-
-# Fixed Regression Coeffcients
-beta_fixed = zeros(p, n_time_points, n_repetitions)
-active_coefficients = Random.rand([-2, 2], p1)
-
-for rep = 1:n_repetitions
-    beta_baseline = Float32.(vcat(
-        zeros(p0), active_coefficients .+ randn(p1) * 0.1
-    ))
-
-    beta_time_int = Float32.(beta_time_int)
-    
-    beta_fixed[:, :, rep] = hcat(beta_baseline, beta_time_int)
-end
-
-Xfix = randn(n_individuals, p)
-
-# Array over multiple measurements
-array_mu = zeros(n_individuals, n_time_points, n_repetitions)
-for rep = 1:n_repetitions
-
-    mu_baseline = beta_time[1, rep] .+ u0 .+ Xfix * beta_fixed[:, 1, rep]
-
-    mu_inc = [
-        ones(n_individuals) .* beta_time[tt, rep] .+ Xfix * beta_fixed[:, tt, rep] for tt = 2:n_time_points
-    ]
-    mu_matrix = reduce(hcat, [mu_baseline, reduce(hcat, mu_inc)])
-    mu = cumsum(mu_matrix, dims=2)
-
-    array_mu[:, :, rep] = mu
-end
-
-# Outcome
-y = Float32.(array_mu .+ randn(n_individuals, n_time_points, n_repetitions) * 0.5)
-
-plt = plot()
-for ii = 1:n_individuals
-    plot!(y[ii, :, 1], label=false)
-end
-display(plt)
-
-plt = plot()
-for ii = 1:n_repetitions
-    plot!(y[1, :, ii], label=false)
-end
-display(plt)
-
 
 data_dict = generate_time_interaction_multiple_measurements_data(
     n_individuals=n_individuals,
@@ -157,37 +110,40 @@ update_parameters_dict(
 # beta fixed
 # hierarchical prior
 
-# group prior on the mean
+# group prior on the variance of the half-cauchy
+hyperprior_sigma = Float32.(ones(p, n_time_points))
+hyperprior_sigma[:, 2:n_time_points] .= 0.1f0
+
 update_parameters_dict(
     params_dict;
     name="sigma_beta_group",
     dimension=(p, n_time_points),
     bij=VectorizedBijectors.softplus,
     log_prob_fun=x::AbstractArray{Float32} -> DistributionsLogPdf.log_half_cauchy(
-        x, sigma=Float32.(ones(p, n_time_points))
+        x, sigma=hyperprior_sigma
     )
 )
-update_parameters_dict(
-    params_dict;
-    name="beta_group",
-    dimension=(p, n_time_points),
-    log_prob_fun=(x::AbstractArray{Float32}, sigma::AbstractArray{Float32}) -> DistributionsLogPdf.log_normal(
-        x, sigma=sigma
-    ),
-    dependency=["sigma_beta_group"]
-)
+# update_parameters_dict(
+#     params_dict;
+#     name="beta_group",
+#     dimension=(p, n_time_points),
+#     log_prob_fun=(x::AbstractArray{Float32}, sigma::AbstractArray{Float32}) -> DistributionsLogPdf.log_normal(
+#         x, sigma=sigma
+#     ),
+#     dependency=["sigma_beta_group"]
+# )
 
 # prior over repeated measurements
 update_parameters_dict(
     params_dict;
     name="beta_fixed",
     dimension=(p, n_time_points, n_repetitions),
-    log_prob_fun=(x::AbstractArray{Float32}, mu::AbstractArray{Float32}) -> DistributionsLogPdf.log_normal(
+    log_prob_fun=(x::AbstractArray{Float32}, sigma::AbstractArray{Float32}) -> DistributionsLogPdf.log_normal(
         x,
-        mu=mu .* Float32.(ones(p, n_time_points, n_repetitions)),
-        sigma=Float32.(ones(p, n_time_points, n_repetitions))
+        mu=Float32.(zeros(p, n_time_points, n_repetitions)),
+        sigma=sigma .* Float32.(ones(p, n_time_points, n_repetitions))
     ),
-    dependency=["beta_group"]
+    dependency=["sigma_beta_group"]
 )
 
 # beta time
@@ -246,12 +202,6 @@ theta_c = get_parameters_axes(params_dict)[2]
 model(theta_c, 1)[1]
 model(theta_c, 1)[2]
 
-loglik = 0f0
-for rep = 1:n_repetitions
-    loglik += sum(DistributionsLogPdf.log_normal(y[:, :, rep], model(theta_c, rep)...))
-end
-loglik
-
 # model log joint
 partial_log_joint(theta) = log_joint(
     theta;
@@ -259,7 +209,7 @@ partial_log_joint(theta) = log_joint(
     theta_axes=theta_axes,
     model=model,
     log_likelihood=DistributionsLogPdf.log_normal,
-    label=y,
+    label=data_dict["y"],
     n_repeated_measures=n_repetitions
 )
 theta = Float32.(ones(params_dict["tot_params"]))
@@ -296,7 +246,7 @@ samples_posterior = posterior_samples(
 
 # hyperprior on beta - mu
 beta_group_samples = extract_parameter(
-    prior="beta_group",
+    prior="sigma_beta_group",
     params_dict=params_dict,
     samples_posterior=samples_posterior
 )
@@ -381,7 +331,7 @@ plt = density(rand(ms_dist, MC_SAMPLES)', label=false)
 metrics = MirrorStatistic.optimal_inclusion(
     ms_dist_vec=ms_dist,
     mc_samples=MC_SAMPLES,
-    beta_true=vcat(data_dict["beta_fixed"]...),
+    beta_true=vcat(mean(data_dict["beta_fixed"], dims=3)[:,:,1]...),
     fdr_target=0.1
 )
 
@@ -389,8 +339,8 @@ metrics = MirrorStatistic.optimal_inclusion(
 plt = fdr_n_hist(metrics)
 
 # Newton's rule
-n_inclusion_per_coef = sum(metrics.inclusion_matrix, dims=2)[:,1]
-mean_inclusion_per_coef = mean(metrics.inclusion_matrix, dims=2)[:,1]
+n_inclusion_per_coef = sum(metrics.inclusion_matrix, dims=2)[:, 1]
+mean_inclusion_per_coef = mean(metrics.inclusion_matrix, dims=2)[:, 1]
 
 c_opt, selection = MirrorStatistic.posterior_fdr_threshold(
     mean_inclusion_per_coef,
