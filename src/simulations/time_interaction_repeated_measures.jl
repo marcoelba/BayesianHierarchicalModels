@@ -17,7 +17,7 @@ include(joinpath(abs_project_path, "src", "model_building", "vectorised_bijector
 
 
 n_individuals = 100
-n_time_points = 5
+n_time_points = 4
 n_repetitions = 5
 p = 100
 p1 = Int(p * 0.1)
@@ -28,37 +28,23 @@ corr_factor = 0.5
 label_files = "algo_time_int_repeated_n$(n_individuals)_t$(n_time_points)_M$(n_repetitions)_p$(p)_active$(p1)_r$(Int(corr_factor*100))"
 
 # time effect dummies - first one is the baseline intercept
-beta_time = [1., 1., 2., 1., 0.]
+beta_time = [1., 1., 2., 0.]
 beta_time = beta_time .+ randn(n_time_points, n_repetitions) * 0.05
 
-p_int_t2 = 10
-p_int_t3 = 5
-p_int_t4 = 5
-p_int_t5 = 0
+p_int_t2 = 0
+p_int_t3 = 0
+p_int_t4 = 0
 
 beta_time_int = hcat(
     vcat(zeros(p - p_int_t2), ones(p_int_t2)),
     vcat(zeros(p - p_int_t3), ones(p_int_t3)),
-    vcat(zeros(p - p_int_t4), ones(p_int_t4)),
-    vcat(zeros(p - p_int_t5), ones(p_int_t5))
+    vcat(zeros(p - p_int_t4), ones(p_int_t4))
 )
-
-plt = plot()
-for ii = 1:n_individuals
-    plot!(data_dict["y"][ii, :, 1], label=false)
-end
-display(plt)
-
-plt = plot()
-for ii = 1:n_repetitions
-    plot!(data_dict["y"][1, :, ii], label=false)
-end
-display(plt)
 
 #
 n_chains = 1
 num_iter = 2000
-MC_SAMPLES = 2000
+MC_SAMPLES = 1000
 
 params_dict = OrderedDict()
 
@@ -98,6 +84,7 @@ update_parameters_dict(
 hyperprior_sigma = Float32.(ones(p, n_time_points))
 hyperprior_sigma[:, 2:n_time_points] .= 0.1f0
 
+
 update_parameters_dict(
     params_dict;
     name="sigma_beta_group",
@@ -107,28 +94,43 @@ update_parameters_dict(
         x, sigma=hyperprior_sigma
     )
 )
+
+update_parameters_dict(
+    params_dict;
+    name="mu_beta_group",
+    dimension=(p, n_time_points),
+    log_prob_fun=(x::AbstractArray{Float32}, sigma::AbstractArray{Float32}) -> DistributionsLogPdf.log_normal(
+        x,
+        sigma=sigma
+    ),
+    dependency=["sigma_beta_group"]
+)
+
+# prior over repeated measurements
 # update_parameters_dict(
 #     params_dict;
-#     name="beta_group",
-#     dimension=(p, n_time_points),
+#     name="beta_fixed",
+#     dimension=(p, n_time_points, n_repetitions),
 #     log_prob_fun=(x::AbstractArray{Float32}, sigma::AbstractArray{Float32}) -> DistributionsLogPdf.log_normal(
-#         x, sigma=sigma
+#         x,
+#         mu=Float32.(zeros(p, n_time_points, n_repetitions)),
+#         sigma=sigma .* Float32.(ones(p, n_time_points, n_repetitions))
 #     ),
 #     dependency=["sigma_beta_group"]
 # )
 
-# prior over repeated measurements
 update_parameters_dict(
     params_dict;
     name="beta_fixed",
     dimension=(p, n_time_points, n_repetitions),
-    log_prob_fun=(x::AbstractArray{Float32}, sigma::AbstractArray{Float32}) -> DistributionsLogPdf.log_normal(
+    log_prob_fun=(x::AbstractArray{Float32}, mu::AbstractArray{Float32}) -> DistributionsLogPdf.log_normal(
         x,
-        mu=Float32.(zeros(p, n_time_points, n_repetitions)),
-        sigma=sigma .* Float32.(ones(p, n_time_points, n_repetitions))
+        mu=mu .* Float32.(ones(p, n_time_points, n_repetitions)),
+        sigma=Float32.(ones(p, n_time_points, n_repetitions) .* 1)
     ),
-    dependency=["sigma_beta_group"]
+    dependency=["mu_beta_group"]
 )
+
 
 # beta time
 update_parameters_dict(
@@ -171,7 +173,7 @@ update_parameters_dict(
     )
 )
 
-theta_axes, _ = get_parameters_axes(params_dict)
+theta_axes, theta_components = get_parameters_axes(params_dict)
 
 fdr_target = 0.1
 n_iter = 2000
@@ -321,6 +323,19 @@ data_dict = generate_time_interaction_multiple_measurements_data(
     dtype=Float32
 )
 
+plt = plot()
+for ii = 1:n_individuals
+    plot!(data_dict["y"][ii, :, 1], label=false)
+end
+display(plt)
+
+plt = plot()
+for ii = 1:n_repetitions
+    plot!(data_dict["y"][1, :, ii], label=false)
+end
+display(plt)
+
+
 model(theta_components, rep_index) = Predictors.linear_time_random_intercept_model(
     theta_components,
     rep_index,
@@ -347,7 +362,7 @@ res = training_loop(;
     vi_dist=vi_dist,
     z_dim=params_dict["tot_params"]*2,
     n_iter=n_iter,
-    n_chains=n_chains,
+    n_chains=1,
     samples_per_step=2,
     use_noisy_grads=false,
     n_cycles=1
@@ -375,21 +390,41 @@ beta_group_samples = extract_parameter(
 )
 # beta baseline
 plt = density(beta_group_samples', label=false)
-data_dict["beta_fixed"][:, :, 1]
+
+beta_mu_samples = extract_parameter(
+    prior="mu_beta_group",
+    params_dict=params_dict,
+    samples_posterior=samples_posterior
+)
+# beta baseline
+plt = density(beta_mu_samples[1:p, :]', label=false)
+data_dict["beta_active_coefficients"]
+
+plt = density(beta_mu_samples[p+1:2*p, :]', label=false)
+plt = density(beta_mu_samples[2*p+1:3*p, :]', label=false)
+
 
 beta_samples = extract_parameter(
     prior="beta_fixed",
     params_dict=params_dict,
     samples_posterior=samples_posterior
 )
-s_reshape = zeros(params_dict["priors"]["beta_fixed"]["size"]..., mc_samples)
+s_reshape = zeros(params_dict["priors"]["beta_fixed"]["size"]..., MC_SAMPLES)
 for mc = 1:MC_SAMPLES
-    s_reshape[:, :, :, mc] = reshape(beta_samples[:, mc], params_dict["priors"]["beta_fixed"]["size"])
+    temp = reshape(
+        beta_samples[:, mc],
+        params_dict["priors"]["beta_fixed"]["size"]
+    )
+    s_reshape[:, :, :, mc] = temp
 end
 
 # beta baseline
 plt = density(s_reshape[:, 1, 1, :]', label=false)
-data_dict["beta_fixed"]
+data_dict["beta_fixed"][p0:p, 1, 1]
+data_dict["beta_fixed"][p0:p, 1, 2]
+
+plt = density(s_reshape[:, 1, 2, :]', label=false)
+
 
 plt = density(s_reshape[:, 2, 1, :]', label=false)
 beta_time_int

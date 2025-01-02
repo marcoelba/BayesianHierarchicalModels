@@ -232,10 +232,12 @@ function generate_time_interaction_multiple_measurements_data(;
     p, p1, p0, beta_pool=Float32.([-1., -2., 1, 2]),
     obs_noise_sd=1., corr_factor=0.5,
     include_random_int=false, random_int_from_pool=false,
-    random_intercept_sd=0.3, beta0_pool=Float32.([-2, -1.5, -0.5, 0, 0.5, 1.5, 2]),
+    random_intercept_sd=0.3,
+    beta0_pool=Float32.([-2, -1.5, -0.5, 0, 0.5, 1.5, 2]),
     beta_time=Float32.(ones(n_time_points, n_repeated_measures)),
     beta_time_int=zeros(p, n_time_points - 1),
-    random_seed=124, dtype=Float32
+    random_seed=124,
+    dtype=Float32
     )
 
     data_dict = Dict()
@@ -258,9 +260,11 @@ function generate_time_interaction_multiple_measurements_data(;
     # beta fixed
     beta_fixed = zeros(p, n_time_points, n_repeated_measures)
     active_coefficients = Random.rand(beta_pool, p1)
+    data_dict["beta_active_coefficients"] = active_coefficients
+
     for rep = 1:n_repeated_measures
         beta_baseline = dtype.(vcat(
-            zeros(p0), active_coefficients .+ randn(p1) * 0.1
+            zeros(p0), active_coefficients .+ randn(p1) * 0.05
         ))
         beta_time_int = dtype.(beta_time_int)
         beta_fixed[:, :, rep] = hcat(beta_baseline, beta_time_int)
