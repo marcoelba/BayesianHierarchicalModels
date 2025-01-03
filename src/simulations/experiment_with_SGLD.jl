@@ -30,8 +30,8 @@ end
 
 n_individuals = 200
 
-p = 1000
-prop_non_zero = 0.02
+p = 500
+prop_non_zero = 0.05
 p1 = Int(p * prop_non_zero)
 p0 = p - p1
 corr_factor = 0.5
@@ -46,7 +46,7 @@ params_dict = OrderedDict()
 update_parameters_dict(
     params_dict;
     name="beta0",
-    dimension=(1, ),
+    dimension=(1,),
     log_prob_fun=x::Float32 -> DistributionsLogPdf.log_normal(x)
 )
 
@@ -57,57 +57,49 @@ update_parameters_dict(
     dimension=(p, ),
     bij=VectorizedBijectors.softplus,
     log_prob_fun=x::AbstractArray{Float32} -> DistributionsLogPdf.log_half_cauchy(
-        x, sigma=Float32.(ones(p)*1)
+        x, sigma=Float32.(ones(p) * 1)
     )
 )
+
 update_parameters_dict(
     params_dict;
     name="beta",
-    dimension=(p, ),
-    log_prob_fun=(x::AbstractArray{Float32}, sigma::AbstractArray{Float32}) -> DistributionsLogPdf.log_normal(x, sigma=sigma),
+    dimension=(p,),
+    log_prob_fun=(x::AbstractArray{Float32}, sigma::AbstractArray{Float32}) -> DistributionsLogPdf.log_normal(
+        x, sigma=sigma
+    ),
     dependency=["sigma_beta"]
-)
-
-# sigma y
-update_parameters_dict(
-    params_dict;
-    name="sigma_y",
-    dimension=(1, ),
-    bij=VectorizedBijectors.softplus,
-    log_prob_fun=x::Float32 -> Distributions.logpdf(
-        truncated(Normal(0f0, 1f0), 0f0, Inf32),
-        x
-    )
 )
 
 theta_axes, _ = get_parameters_axes(params_dict)
 
-data_dict = generate_linear_model_data(
-    n_individuals=n_individuals,
-    p=p, p1=p1, p0=p0, corr_factor=corr_factor,
-    random_seed=random_seed
+
+data_dict = generate_logistic_model_data(;
+    n_individuals, class_threshold=0.5f0,
+    p, p1, p0, beta_pool=Float32.([-2., 2]), obs_noise_sd=0.5, corr_factor=0.5,
+    random_seed=124, dtype=Float32
 )
 
 # model predictions
-model(theta_components) = Predictors.linear_model(
+model(theta_components) = Predictors.linear_predictor(
     theta_components;
     X=data_dict["X"]
 )
 
-# model log joint
+# model
 partial_log_joint(theta) = - log_joint(
     theta;
     params_dict=params_dict,
     theta_axes=theta_axes,
     model=model,
-    log_likelihood=DistributionsLogPdf.log_normal,
+    log_likelihood=DistributionsLogPdf.log_bernoulli_from_logit,
     label=data_dict["y"]
 )
 
 # Training
 n_iter = 6000
-n_chains = 4
-n_cycles = 2
+n_chains = 1
+n_cycles = 4
 steps_per_cycle = Int(n_iter / n_cycles)
 n_iter_tot = n_iter
 z_dim = params_dict["tot_params"]
@@ -116,8 +108,14 @@ use_noisy_grads = true
 lr_schedule = cyclical_polynomial_decay(n_iter, n_cycles)
 
 freq_store = 5
-z_store_cycle_schedule = Int.(range(steps_per_cycle / 2, steps_per_cycle, step=freq_store))
-z_store_schedule = vcat([z_store_cycle_schedule .+ (steps_per_cycle * cycle) for cycle = 1:(n_cycles - 1)]...)
+z_store_cycle_schedule = Int.(range(steps_per_cycle / 2 + freq_store, steps_per_cycle, step=freq_store))
+if n_cycles > 1
+    z_store_schedule = vcat(
+        [z_store_cycle_schedule .+ (steps_per_cycle * cycle) for cycle = 1:(n_cycles - 1)]...
+    )
+else
+    z_store_schedule = z_store_cycle_schedule
+end
 n_mcmc_samples = length(z_store_schedule)
 
 all_iterations = Int.(zeros(n_iter_tot))
@@ -198,6 +196,7 @@ histogram(beta[1, :])
 scatter(beta[p, :])
 scatter(beta[p-1, :])
 
+density(beta', label=false)
 
 # Using the FDR criterion from MS
 fdr_target = 0.1

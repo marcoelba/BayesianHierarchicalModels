@@ -36,7 +36,7 @@ random_seed = 1234
 simulations_models = Dict()
 simulations_metrics = Dict()
 
-label_files = "algo_HS_logistic_n$(n_individuals)_p$(p)_active$(p1)_r$(Int(corr_factor*100))"
+label_files = "algo_logistic_n$(n_individuals)_p$(p)_active$(p1)_r$(Int(corr_factor*100))"
 
 params_dict = OrderedDict()
 
@@ -52,18 +52,20 @@ update_parameters_dict(
 update_parameters_dict(
     params_dict;
     name="sigma_beta",
-    dimension=(p,),
+    dimension=(p, ),
     bij=VectorizedBijectors.softplus,
-    log_prob_fun=x::AbstractArray{Float32} -> sum(Distributions.logpdf.(
-        truncated(Cauchy(0f0, Float32(0.1)), 0f0, Inf32),
-        x
-    ))
+    log_prob_fun=x::AbstractArray{Float32} -> DistributionsLogPdf.log_half_cauchy(
+        x, sigma=Float32.(ones(p) * 1)
+    )
 )
+
 update_parameters_dict(
     params_dict;
     name="beta",
     dimension=(p,),
-    log_prob_fun=(x::AbstractArray{Float32}, sigma::AbstractArray{Float32}) -> DistributionsLogPdf.log_normal(x, sigma=sigma),
+    log_prob_fun=(x::AbstractArray{Float32}, sigma::AbstractArray{Float32}) -> DistributionsLogPdf.log_normal(
+        x, sigma=sigma
+    ),
     dependency=["sigma_beta"]
 )
 
@@ -108,7 +110,7 @@ for simu = 1:n_simulations
         n_chains=n_chains,
         samples_per_step=2,
         sd_init=0.5f0,
-        use_noisy_grads=true,
+        use_noisy_grads=false,
         n_cycles=1
     )
 
@@ -144,11 +146,6 @@ for simu = 1:n_simulations
         selection
     )
 
-    metrics_dict["fdr_range"] = metrics.fdr_range
-    metrics_dict["tpr_range"] = metrics.tpr_range
-    
-    metrics_dict["metrics_mean"] = metrics.metrics_mean
-    metrics_dict["metrics_median"] = metrics.metrics_median
     metrics_dict["metrics_posterior"] = metrics_posterior
 
     simulations_metrics[simu] = metrics_dict
@@ -156,40 +153,23 @@ for simu = 1:n_simulations
 end
 
 
-mean_fdr = []
-mean_tpr = []
 posterior_fdr = []
 posterior_tpr = []
 
 for simu = 1:n_simulations
-    push!(mean_fdr, simulations_metrics[simu]["metrics_mean"].fdr)
-    push!(mean_tpr, simulations_metrics[simu]["metrics_mean"].tpr)
-
     push!(posterior_fdr, simulations_metrics[simu]["metrics_posterior"].fdr)
     push!(posterior_tpr, simulations_metrics[simu]["metrics_posterior"].tpr)
 
 end
 
-all_metrics = hcat(mean_fdr, posterior_fdr, mean_tpr, posterior_tpr)
-df = DataFrame(all_metrics, ["mean_fdr", "posterior_fdr", "mean_tpr", "posterior_tpr"])
+all_metrics = hcat(posterior_fdr, posterior_tpr)
+df = DataFrame(all_metrics, ["posterior_fdr", "posterior_tpr"])
 
 CSV.write(
     joinpath(abs_project_path, "results", "simulations", "$(label_files).csv"),
     df
 )
 
-
-plt_tpr = boxplot(mean_tpr, label=false)
-boxplot!(posterior_tpr, label=false)
-xticks!([1, 2], ["Mean", "Posterior"], tickfontsize=10)
-title!("TPR", titlefontsize=20)
-
-plt_fdr = boxplot(mean_fdr, label=false)
-boxplot!(posterior_fdr, label=false)
-xticks!([1, 2], ["Mean", "Posterior"], tickfontsize=10)
-title!("FDR", titlefontsize=20)
-
-plt = plot(plt_fdr, plt_tpr)
 
 plt = violin([1], posterior_fdr, color="lightblue", label=false, alpha=1, linewidth=0)
 boxplot!([1], posterior_fdr, label=false, color="blue", fillalpha=0.1, linewidth=2)
@@ -289,7 +269,7 @@ for tau2 in tau2_vec
         n_chains=n_chains,
         samples_per_step=2,
         sd_init=0.5f0,
-        use_noisy_grads=true,
+        use_noisy_grads=false,
         n_cycles=1
     )
 
@@ -334,6 +314,63 @@ for tau2 in tau2_vec
 end
 
 
+##### --------------------------###### --------------------------
+y_pred = data_dict["X"] * data_dict["beta"] .+ data_dict["beta0"]
+loglik_true = sum(DistributionsLogPdf.log_bernoulli_from_logit(
+    data_dict["y"],
+    y_pred
+))
+log_joint(
+    Float32.(vcat(data_dict["beta0"], ones(p), data_dict["beta"])),
+    params_dict=params_dict,
+    theta_axes=theta_axes,
+    model=model,
+    log_likelihood=DistributionsLogPdf.log_bernoulli_from_logit,
+    label=data_dict["y"]
+)
+
+samples_posterior = posterior_samples(
+    vi_posterior=vi_posterior,
+    params_dict=params_dict,
+    n_samples=MC_SAMPLES
+)
+beta0_samples = mean(extract_parameter(
+    prior="beta0",
+    params_dict=params_dict,
+    samples_posterior=samples_posterior
+))
+beta_samples = mean(extract_parameter(
+    prior="beta",
+    params_dict=params_dict,
+    samples_posterior=samples_posterior
+), dims=2)[:, 1]
+sigma_beta_samples = mean(extract_parameter(
+    prior="sigma_beta",
+    params_dict=params_dict,
+    samples_posterior=samples_posterior
+), dims=2)[:, 1]
+
+beta_wrong = copy(beta_samples)
+beta_wrong[selection .== 0] .= 0f0
+y_pred = data_dict["X"] * beta_wrong .+ data_dict["beta0"]
+loglik = sum(DistributionsLogPdf.log_bernoulli_from_logit(
+    data_dict["y"],
+    y_pred
+))
+
+params_dict["priors"]
+log_joint(
+    Float32.(vcat(beta0_samples, ones(p), beta_samples)),
+    params_dict=params_dict,
+    theta_axes=theta_axes,
+    model=model,
+    log_likelihood=DistributionsLogPdf.log_bernoulli_from_logit,
+    label=data_dict["y"]
+)
+##### --------------------------###### --------------------------
+
+
+
 # ------ Mirror Statistic ------
 
 ms_dist = MirrorStatistic.posterior_ms_coefficients(
@@ -350,9 +387,6 @@ metrics = MirrorStatistic.optimal_inclusion(
 )
 
 # distribution
-boxplot(metrics.fdr_distribution, label="FDR")
-boxplot!(metrics.tpr_distribution, label="TPR")
-
 plt = fdr_n_hist(metrics)
 savefig(plt, joinpath(abs_project_path, "results", "simulations", "$(label_files)_fdr_n_hist.pdf"))
 

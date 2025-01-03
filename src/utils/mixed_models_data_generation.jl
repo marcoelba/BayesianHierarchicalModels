@@ -156,7 +156,7 @@ function generate_logistic_model_data(;
 
     # Fixed Coeffcients
     beta_fixed = dtype.(vcat(zeros(p0), Random.rand(beta_pool, p1)))
-    beta0_fixed = dtype.(1.)
+    beta0_fixed = dtype.(0.)
 
     data_dict["beta"] = beta_fixed
     data_dict["beta0"] = beta0_fixed
@@ -229,8 +229,11 @@ end
 
 function generate_time_interaction_multiple_measurements_data(;
     n_individuals, n_time_points, n_repeated_measures,
-    p, p1, p0, beta_pool=Float32.([-1., -2., 1, 2]),
-    obs_noise_sd=1., corr_factor=0.5,
+    p, p1, p0,
+    beta_pool=Float32.([-1., -2., 1, 2]),
+    sd_noise_beta_reps=0.,
+    obs_noise_sd=1.,
+    corr_factor=0.5,
     include_random_int=false, random_int_from_pool=false,
     random_intercept_sd=0.3,
     beta0_pool=Float32.([-2, -1.5, -0.5, 0, 0.5, 1.5, 2]),
@@ -260,14 +263,14 @@ function generate_time_interaction_multiple_measurements_data(;
     # beta fixed
     beta_fixed = zeros(p, n_time_points, n_repeated_measures)
     active_coefficients = Random.rand(beta_pool, p1)
-    data_dict["beta_active_coefficients"] = active_coefficients
+
+    beta_baseline = dtype.(vcat(zeros(p0), active_coefficients))
+    beta_reg = hcat(beta_baseline, dtype.(beta_time_int))
+    data_dict["beta_reg"] = beta_reg
+    mask = beta_reg .!= 0
 
     for rep = 1:n_repeated_measures
-        beta_baseline = dtype.(vcat(
-            zeros(p0), active_coefficients .+ randn(p1) * 0.05
-        ))
-        beta_time_int = dtype.(beta_time_int)
-        beta_fixed[:, :, rep] = hcat(beta_baseline, beta_time_int)
+        beta_fixed[:, :, rep] = beta_reg .+ mask .* randn(size(beta_reg)) * dtype(sd_noise_beta_reps)
     end
     data_dict["beta_fixed"] = beta_fixed
     

@@ -107,17 +107,17 @@ update_parameters_dict(
 )
 
 # prior over repeated measurements
-# update_parameters_dict(
-#     params_dict;
-#     name="beta_fixed",
-#     dimension=(p, n_time_points, n_repetitions),
-#     log_prob_fun=(x::AbstractArray{Float32}, sigma::AbstractArray{Float32}) -> DistributionsLogPdf.log_normal(
-#         x,
-#         mu=Float32.(zeros(p, n_time_points, n_repetitions)),
-#         sigma=sigma .* Float32.(ones(p, n_time_points, n_repetitions))
-#     ),
-#     dependency=["sigma_beta_group"]
-# )
+update_parameters_dict(
+    params_dict;
+    name="beta_fixed",
+    dimension=(p, n_time_points, n_repetitions),
+    log_prob_fun=(x::AbstractArray{Float32}, sigma::AbstractArray{Float32}) -> DistributionsLogPdf.log_normal(
+        x,
+        mu=Float32.(zeros(p, n_time_points, n_repetitions)),
+        sigma=sigma .* Float32.(ones(p, n_time_points, n_repetitions))
+    ),
+    dependency=["sigma_beta_group"]
+)
 
 update_parameters_dict(
     params_dict;
@@ -314,6 +314,7 @@ data_dict = generate_time_interaction_multiple_measurements_data(
     n_repeated_measures=n_repetitions,
     p=p, p1=p1, p0=p0,
     beta_pool=Float32.([-1., -2., 1, 2]),
+    sd_noise_beta_reps=0.,
     obs_noise_sd=0.5,
     corr_factor=corr_factor,
     include_random_int=true, random_int_from_pool=false,
@@ -497,7 +498,7 @@ plt = density(rand(ms_dist, MC_SAMPLES)', label=false)
 metrics = MirrorStatistic.optimal_inclusion(
     ms_dist_vec=ms_dist,
     mc_samples=MC_SAMPLES,
-    beta_true=vcat(mean(data_dict["beta_fixed"], dims=3)[:,:,1]...),
+    beta_true=vcat(data_dict["beta_fixed"]...),
     fdr_target=0.1
 )
 
