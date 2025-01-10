@@ -32,22 +32,28 @@ end
 function posterior_samples(;
     vi_posterior::Distributions.Distribution,
     params_dict::OrderedDict,
-    n_samples::Int64=1
+    n_samples::Int64=1,
+    transform_with_bijectors::Bool=true
     )
 
     raw_sample = rand(vi_posterior, n_samples)
 
-    one_sample = vcat(
-        [params_dict["bijectors"][pp](raw_sample[params_dict["ranges"][pp], 1]) for pp in eachindex(params_dict["bijectors"])]...
-    )
-    t_sample = zeros(size(one_sample)..., n_samples)
+    if transform_with_bijectors
 
-    for mc = 1:n_samples
-        t_sample[:, mc] = vcat(
-            [params_dict["bijectors"][pp](raw_sample[params_dict["ranges"][pp], mc]) for pp in eachindex(params_dict["bijectors"])]...
-        )    
+        one_sample = vcat(
+            [params_dict["bijectors"][pp](raw_sample[params_dict["ranges"][pp], 1]) for pp in eachindex(params_dict["bijectors"])]...
+        )
+        t_sample = zeros(size(one_sample)..., n_samples)
+
+        for mc = 1:n_samples
+            t_sample[:, mc] = vcat(
+                [params_dict["bijectors"][pp](raw_sample[params_dict["ranges"][pp], mc]) for pp in eachindex(params_dict["bijectors"])]...
+            )    
+        end
+    else
+        t_sample = raw_sample
     end
-
+    
     return t_sample
 end
 

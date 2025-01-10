@@ -5,6 +5,7 @@ using DataFrames
 using OrderedCollections
 using Distributions
 using StatsPlots
+using Flux: RMSProp
 
 abs_project_path = normpath(joinpath(@__FILE__, "..", "..", ".."))
 
@@ -28,7 +29,7 @@ function get_transformed_parameter(z_trace, priors; variable)
 end
 
 
-n_individuals = 200
+n_individuals = 500
 
 p = 500
 prop_non_zero = 0.05
@@ -53,12 +54,23 @@ update_parameters_dict(
 # beta fixed
 update_parameters_dict(
     params_dict;
-    name="sigma_beta",
+    name="tau_sigma",
     dimension=(p, ),
     bij=VectorizedBijectors.softplus,
     log_prob_fun=x::AbstractArray{Float32} -> DistributionsLogPdf.log_half_cauchy(
         x, sigma=Float32.(ones(p) * 1)
     )
+)
+
+update_parameters_dict(
+    params_dict;
+    name="sigma_beta",
+    dimension=(p, ),
+    bij=VectorizedBijectors.softplus,
+    log_prob_fun=(x::AbstractArray{Float32}, sigma::AbstractArray{Float32}) -> DistributionsLogPdf.log_half_cauchy(
+        x, sigma=sigma
+    ),
+    dependency=["tau_sigma"]
 )
 
 update_parameters_dict(
@@ -97,7 +109,7 @@ partial_log_joint(theta) = - log_joint(
 )
 
 # Training
-n_iter = 6000
+n_iter = 10000
 n_chains = 1
 n_cycles = 4
 steps_per_cycle = Int(n_iter / n_cycles)
@@ -121,7 +133,7 @@ n_mcmc_samples = length(z_store_schedule)
 all_iterations = Int.(zeros(n_iter_tot))
 all_iterations[z_store_schedule] .= 1
 
-sd_init = Float32.(0.5)
+sd_init = Float32.(0.1)
 
 posteriors = Dict()
 loss_trace = zeros(n_iter_tot, n_chains)
@@ -132,6 +144,7 @@ for chain in range(1, n_chains)
 
     # Optimizer
     optimizer = MyDecayedADAGrad()
+
 
     # --- Train loop ---
     converged = false
@@ -193,8 +206,8 @@ sigma_beta = get_transformed_parameter(z_trace, priors, variable="sigma_beta")
 
 histogram(beta0)
 histogram(beta[1, :])
-scatter(beta[p, :])
-scatter(beta[p-1, :])
+histogram(beta[p, :])
+histogram(beta[p-1, :])
 
 density(beta', label=false)
 

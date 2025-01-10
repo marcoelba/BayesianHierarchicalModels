@@ -47,6 +47,20 @@ function log_bernoulli_from_logit(x::Real, logitp::Real)
 end
 
 """
+    Bernoulli likelihood
+"""
+eps_prob = 1e-6
+
+function log_bernoulli(x::AbstractArray, prob::AbstractArray)
+    @. x * log(prob + eps_prob) + (1. - x) * log(1. - prob + eps_prob)
+end
+
+function log_bernoulli(x::Real, prob::Real)
+    x * log(prob + eps_prob) + (1. - x) * log(1. - prob + eps_prob)
+end
+
+
+"""
 Log-pdf of a mixture of Normal distributions.
     x::Float32
     w::AbstractArray{<:Float32}

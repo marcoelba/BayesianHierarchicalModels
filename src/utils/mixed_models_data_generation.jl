@@ -110,6 +110,8 @@ function generate_linear_model_data(;
     cor_coefs_1 = vcat([1.], [corr_factor * (p1 - ll) / (p1 - 1) for ll in range(1, p1-1)])
     cov_matrix_0 = Array(Toeplitz(cor_coefs_0, cor_coefs_0))
     cov_matrix_1 = Array(Toeplitz(cor_coefs_1, cor_coefs_1))
+    data_dict["cov_matrix_0"] = cov_matrix_0
+    data_dict["cov_matrix_1"] = cov_matrix_1
 
     Xfix_0 = rand(MultivariateNormal(cov_matrix_0), n_individuals)
     Xfix_1 = rand(MultivariateNormal(cov_matrix_1), n_individuals)
@@ -147,6 +149,8 @@ function generate_logistic_model_data(;
     cor_coefs_1 = vcat([1.], [corr_factor * (p1 - ll) / (p1 - 1) for ll in range(1, p1-1)])
     cov_matrix_0 = Array(Toeplitz(cor_coefs_0, cor_coefs_0))
     cov_matrix_1 = Array(Toeplitz(cor_coefs_1, cor_coefs_1))
+    data_dict["cov_matrix_0"] = cov_matrix_0
+    data_dict["cov_matrix_1"] = cov_matrix_1
 
     Xfix_0 = rand(MultivariateNormal(cov_matrix_0), n_individuals)
     Xfix_1 = rand(MultivariateNormal(cov_matrix_1), n_individuals)

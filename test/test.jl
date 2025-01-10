@@ -119,3 +119,18 @@ sum(abs_x .> 1.8) / length(x)
 logit_x = logistic.(abs_x)
 density!(logit_x)
 sum(logit_x .> logistic(1.8)) / length(x)
+
+
+# Link function #
+function link_logistic(x)
+    1 / (1 + exp(-x))
+end
+
+function link_probit(x; mu=0., sigma=1.)
+    norm_dist = Distributions.Normal(mu, sigma)
+    Distributions.cdf(norm_dist, x)
+end
+
+x = -3.
+link_logistic(x)
+link_probit(x, sigma=10.)

@@ -509,3 +509,59 @@ for t in t_range
     end
 end
 mean(mc_fdp_estimate(ms_samples, probs_inc, opt_t))
+
+
+# -------------------------------------------------------
+# Knockoffs 
+using GLMNet
+
+fdr = []
+tpr = []
+
+for simu = 1:n_simulations
+
+    println("Simulation: $(simu)")
+
+    data_dict = generate_linear_model_data(
+        n_individuals=n_individuals,
+        p=p, p1=p1, p0=p0, corr_factor=corr_factor,
+        random_seed=random_seed + simu
+    )
+
+    Xk_0 = rand(MultivariateNormal(data_dict["cov_matrix_0"]), n_individuals)
+    Xk_1 = rand(MultivariateNormal(data_dict["cov_matrix_1"]), n_individuals)
+    Xk = transpose(vcat(Xk_0, Xk_1))
+
+    X_aug = hcat(data_dict["X"], Xk)
+
+    glm_k = GLMNet.glmnetcv(X_aug, Float64.(data_dict["y"]))
+    coefs = GLMNet.coef(glm_k)
+
+    beta_1 = coefs[1:p]
+    beta_2 = coefs[p+1:2*p]
+
+    mirror_coeffs = abs.(beta_1) .- abs.(beta_2)
+    
+    opt_t = MirrorStatistic.get_t(mirror_coeffs; fdr_target=fdr_target)
+    n_selected = sum(mirror_coeffs .> opt_t)
+
+    metrics = MirrorStatistic.wrapper_metrics(
+        data_dict["beta"] .!= 0.,
+        mirror_coeffs .> opt_t
+    )
+
+    push!(fdr, metrics.fdr)
+    push!(tpr, metrics.tpr)
+
+end
+
+plt = violin([1], fdr, color="lightblue", label=false, alpha=1, linewidth=0)
+boxplot!([1], fdr, label=false, color="blue", fillalpha=0.1, linewidth=2)
+
+violin!([2], tpr, color="lightblue", label=false, alpha=1, linewidth=0)
+boxplot!([2], tpr, label=false, color="blue", fillalpha=0.1, linewidth=2)
+
+xticks!([1, 2], ["FDR", "TPR"], tickfontsize=15)
+yticks!(range(0, 1, step=0.1), tickfontsize=15)
+
+savefig(plt, joinpath(abs_project_path, "results", "simulations", "$(label_files)_fdrtpr_boxplot_Knock.pdf"))

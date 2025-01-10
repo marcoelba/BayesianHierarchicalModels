@@ -219,7 +219,9 @@ function training_loop(;
         step = 1
 
         prog = ProgressMeter.Progress(n_iter_tot, 1)
+        # Init
         z = Float32.(randn(z_dim)) * sd_init
+        
         diff_results = DiffResults.GradientResult(z)
 
         lr_schedule = cyclical_polynomial_decay(n_iter, n_cycles)

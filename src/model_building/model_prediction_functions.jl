@@ -20,11 +20,12 @@ end
 function linear_predictor(
     theta_c::ComponentArray;
     X::AbstractArray,
+    link=identity
     )
 
     mu = theta_c["beta0"] .+ X * theta_c["beta"]
-
-    return (mu,)
+    
+    return (link.(mu),)
 end
 
 
