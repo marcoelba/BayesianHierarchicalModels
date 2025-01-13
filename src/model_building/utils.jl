@@ -112,6 +112,7 @@ function prediction_loglik(
     theta_components,
     model,
     log_likelihood,
+    features,
     label,
     n_repeated_measures::Int64=1
     )
@@ -119,13 +120,15 @@ function prediction_loglik(
     loglik = 0f0
     if n_repeated_measures == 1
         predictions = model(
-            theta_components
+            theta_components,
+            features
         )
         loglik += sum(log_likelihood(label, predictions...))
     else
         for rep = 1:n_repeated_measures
             predictions = model(
                 theta_components,
+                features,
                 rep
             )
             loglik += sum(log_likelihood(label, predictions...))
@@ -136,7 +139,7 @@ function prediction_loglik(
 end
 
 
-function log_joint(theta; params_dict, theta_axes, model, log_likelihood, label, n_repeated_measures=1)
+function log_joint(theta; features, label, params_dict, theta_axes, model, log_likelihood, n_batches=1, n_repeated_measures=1)
 
     priors = params_dict["priors"]
     bijectors = params_dict["bijectors"]
@@ -153,6 +156,7 @@ function log_joint(theta; params_dict, theta_axes, model, log_likelihood, label,
         theta_components,
         model,
         log_likelihood,
+        features,
         label,
         n_repeated_measures
     )
@@ -167,7 +171,7 @@ function log_joint(theta; params_dict, theta_axes, model, log_likelihood, label,
         ))
     end
 
-    loglik + log_prior
+    loglik + log_prior / n_batches
 
 end
 
@@ -187,10 +191,13 @@ end
 
 
 function training_loop(;
-    log_joint,
+    partial_log_joint,
     vi_dist,
+    features,
+    label,
     z_dim::Int64,
     n_iter::Int64,
+    batch_dim::Int64=size(features, 1),
     n_chains::Int64=1,
     samples_per_step::Int64=4,
     sd_init::Float32=0.5f0,
@@ -199,9 +206,8 @@ function training_loop(;
     )
 
     steps_per_cycle = Int(n_iter / n_cycles)
-    n_iter_tot = n_iter + steps_per_cycle
 
-    elbo_trace = zeros(n_iter_tot, n_chains)
+    elbo_trace = zeros(n_iter, n_chains)
     best_iter = zeros(n_chains)
 
     posteriors = Dict()
@@ -215,73 +221,86 @@ function training_loop(;
         # Optimizer
         optimizer = MyDecayedADAGrad()
         # VI algorithm
-        alg = AdvancedVI.ADVI(samples_per_step, n_iter_tot, adtype=ADTypes.AutoZygote())
+        alg = AdvancedVI.ADVI(samples_per_step, n_iter, adtype=ADTypes.AutoZygote())
 
         # --- Train loop ---
-        converged = false
         step = 1
 
-        prog = ProgressMeter.Progress(n_iter_tot, 1)
+        prog = ProgressMeter.Progress(n_iter, 1)
         # Init
         z = Float32.(randn(z_dim)) * sd_init
-
-        best_z = copy(z)
-        best_elbo = AdvancedVI.elbo(
-            alg, vi_dist(z), log_joint, samples_per_step
-        )
-
-        diff_results = DiffResults.GradientResult(z)
-
+        diff_results = DiffResults.GradientResult(z)        
         lr_schedule = cyclical_polynomial_decay(n_iter, n_cycles)
 
-        while (step ≤ n_iter_tot) && !converged
-            
-            AdvancedVI.grad!(
-                variational_objective,
-                alg,
-                vi_dist,
-                log_joint,
-                z,
-                diff_results,
-                samples_per_step
-            )
+        # placeholders for best iteration
+        # best_z = copy(z)
+        # best_elbo = AdvancedVI.elbo(
+        #     alg, vi_dist(z), log_joint, samples_per_step
+        # )
 
-            # # 2. Extract gradient from `diff_result`
-            gradient_step = DiffResults.gradient(diff_results)
+        while step ≤ n_iter
+            # shuffle rows
+            id_rows = Random.shuffle(1:size(features, 1))
+            batches_ids = collect(Iterators.partition(id_rows, batch_dim))
 
-            # # 3. Apply optimizer, e.g. multiplying by step-size
-            diff_grad = apply!(optimizer, z, gradient_step)
+            for batch in batches_ids
+                X_batch = features[batch, :]
+                y_batch = label[batch]
+    
+                batch_log_joint(theta) = partial_log_joint(
+                    theta,
+                    X_batch,
+                    y_batch
+                )
 
-            # 4. Update parameters
-            if step <= n_iter
+                AdvancedVI.grad!(
+                    variational_objective,
+                    alg,
+                    vi_dist,
+                    batch_log_joint,
+                    z,
+                    diff_results,
+                    samples_per_step
+                )
+
+                # # 2. Extract gradient from `diff_result`
+                gradient_step = DiffResults.gradient(diff_results)
+
+                # # 3. Apply optimizer, e.g. multiplying by step-size
+                diff_grad = apply!(optimizer, z, gradient_step)
+
+                # 4. Update parameters
+                grad_noise = 0f0
                 if use_noisy_grads
                     grad_noise = Float32.(randn(z_dim)) .* lr_schedule[step]
-                else
-                    grad_noise = 0f0
                 end
-            else
-                grad_noise = 0f0
+                @. z = z - diff_grad + grad_noise
+
             end
-            @. z = z - diff_grad + grad_noise
 
             # 5. Do whatever analysis you want - Store ELBO value
+            full_log_joint(theta) = partial_log_joint(
+                theta,
+                features,
+                label
+            )
             current_elbo = AdvancedVI.elbo(
-                alg, vi_dist(z), log_joint, samples_per_step
+                alg, vi_dist(z), full_log_joint, samples_per_step
             )
             elbo_trace[step, chain] = current_elbo
-
-            # elbo check
-            if current_elbo > best_elbo
-                best_elbo = copy(current_elbo)
-                best_z = copy(z)
-                best_iter[chain] = copy(step)
-            end
+            
+            # if current_elbo > best_elbo
+            #     best_elbo = copy(current_elbo)
+            #     best_z = copy(z)
+            #     best_iter[chain] = copy(step)
+            # end
 
             step += 1
             ProgressMeter.next!(prog)
+
         end
 
-        q = vi_dist(best_z)
+        q = vi_dist(z)
         posteriors[chain] = q
     end
     

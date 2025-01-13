@@ -209,6 +209,8 @@ n_train = Int(n / 2)
 n_test = n - n_train
 train_ids = sample(1:n, n_train, replace=false)
 test_ids = setdiff(1:n, train_ids)
+batch_dim = n_train
+n_batches = Int(n_train / batch_dim)
 
 X_train = data_dict["X"][train_ids, :]
 X_test = data_dict["X"][test_ids, :]
@@ -255,31 +257,39 @@ for tau2 in tau2_vec
     theta_axes, theta_components = get_parameters_axes(params_dict)
 
     # model predictions
-    model(theta_components) = Predictors.linear_predictor(
+    model(theta_components, features) = Predictors.linear_predictor(
         theta_components;
-        X=X_train[1:100, :],
+        X=features,
         link=identity
     )
+    model(theta_components, X_train)
 
     # model
-    partial_log_joint(theta) = log_joint(
+    partial_log_joint(theta, features, label) = log_joint(
         theta;
+        features=features,
+        label=label,
         params_dict=params_dict,
         theta_axes=theta_axes,
         model=model,
         log_likelihood=DistributionsLogPdf.log_bernoulli_from_logit,
-        label=y_train[1:100, :]
+        n_batches=n_batches
     )
+    theta = Float32.(ones(params_dict["tot_params"]))
+    partial_log_joint(theta, X_train, y_train)
 
     # VI distribution
     vi_dist(z::AbstractArray) = VariationalDistributions.meanfield(z, tot_params=params_dict["tot_params"])
 
     # Training
     res = training_loop(;
-        log_joint=partial_log_joint,
+        partial_log_joint=partial_log_joint,
         vi_dist=vi_dist,
+        features=X_train,
+        label=y_train,
         z_dim=params_dict["tot_params"]*2,
         n_iter=2000,
+        batch_dim=batch_dim,
         n_chains=1,
         samples_per_step=2,
         sd_init=0.5f0,
