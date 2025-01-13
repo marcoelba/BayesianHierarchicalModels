@@ -19,6 +19,7 @@ function update_parameters_dict(
     dimension::Tuple,
     log_prob_fun,
     bij=Base.identity,
+    init=bij(zeros(dimension)),
     dependency=[]
     )
 
@@ -62,6 +63,7 @@ function update_parameters_dict(
         "range" => range,
         "range_transformed" => range_transformed,
         "log_prob" => log_prob_fun,
+        "init" => init,
         "dependency" => dependency
     )
 
@@ -125,7 +127,7 @@ function prediction_loglik(
             predictions = model(
                 theta_components,
                 rep
-            )    
+            )
             loglik += sum(log_likelihood(label, predictions...))
         end
     end
@@ -200,6 +202,7 @@ function training_loop(;
     n_iter_tot = n_iter + steps_per_cycle
 
     elbo_trace = zeros(n_iter_tot, n_chains)
+    best_iter = zeros(n_chains)
 
     posteriors = Dict()
 
@@ -221,7 +224,12 @@ function training_loop(;
         prog = ProgressMeter.Progress(n_iter_tot, 1)
         # Init
         z = Float32.(randn(z_dim)) * sd_init
-        
+
+        best_z = copy(z)
+        best_elbo = AdvancedVI.elbo(
+            alg, vi_dist(z), log_joint, samples_per_step
+        )
+
         diff_results = DiffResults.GradientResult(z)
 
         lr_schedule = cyclical_polynomial_decay(n_iter, n_cycles)
@@ -249,7 +257,7 @@ function training_loop(;
                 if use_noisy_grads
                     grad_noise = Float32.(randn(z_dim)) .* lr_schedule[step]
                 else
-                    grad_noise = Float32.(randn(z_dim)) .* lr_schedule[n_iter]
+                    grad_noise = 0f0
                 end
             else
                 grad_noise = 0f0
@@ -257,18 +265,30 @@ function training_loop(;
             @. z = z - diff_grad + grad_noise
 
             # 5. Do whatever analysis you want - Store ELBO value
-            elbo_trace[step, chain] = AdvancedVI.elbo(
+            current_elbo = AdvancedVI.elbo(
                 alg, vi_dist(z), log_joint, samples_per_step
             )
+            elbo_trace[step, chain] = current_elbo
+
+            # elbo check
+            if current_elbo > best_elbo
+                best_elbo = copy(current_elbo)
+                best_z = copy(z)
+                best_iter[chain] = copy(step)
+            end
 
             step += 1
             ProgressMeter.next!(prog)
         end
 
-        q = vi_dist(z)
+        q = vi_dist(best_z)
         posteriors[chain] = q
     end
     
-    return Dict("posteriors" => posteriors, "elbo_trace" => elbo_trace)
+    return Dict(
+        "posteriors" => posteriors,
+        "elbo_trace" => elbo_trace,
+        "best_iter" => best_iter
+    )
 
 end

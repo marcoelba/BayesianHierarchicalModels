@@ -29,6 +29,17 @@ function get_transformed_parameter(z_trace, priors; variable)
 end
 
 
+# parameters init
+function z_init(params_dict)
+    z = []
+    for pp in keys(params_dict["priors"])
+        append!(z, params_dict["priors"][pp]["init"])
+    end
+
+    return z
+end
+
+
 n_individuals = 500
 
 p = 500
@@ -59,7 +70,8 @@ update_parameters_dict(
     bij=VectorizedBijectors.softplus,
     log_prob_fun=x::AbstractArray{Float32} -> DistributionsLogPdf.log_half_cauchy(
         x, sigma=Float32.(ones(p) * 1)
-    )
+    ),
+    init=invsoftplus.(abs.(randn(p)) .* 0.5)
 )
 
 update_parameters_dict(
@@ -70,7 +82,8 @@ update_parameters_dict(
     log_prob_fun=(x::AbstractArray{Float32}, sigma::AbstractArray{Float32}) -> DistributionsLogPdf.log_half_cauchy(
         x, sigma=sigma
     ),
-    dependency=["tau_sigma"]
+    dependency=["tau_sigma"],
+    init=invsoftplus.(abs.(randn(p)) .* 0.5)
 )
 
 update_parameters_dict(
@@ -80,10 +93,15 @@ update_parameters_dict(
     log_prob_fun=(x::AbstractArray{Float32}, sigma::AbstractArray{Float32}) -> DistributionsLogPdf.log_normal(
         x, sigma=sigma
     ),
+    init=randn(p) .* 0.01,
     dependency=["sigma_beta"]
 )
 
 theta_axes, _ = get_parameters_axes(params_dict)
+
+params_dict["priors"]["tau_sigma"]
+params_dict["priors"]["beta"]
+z_init(params_dict)
 
 
 data_dict = generate_logistic_model_data(;
@@ -111,7 +129,7 @@ partial_log_joint(theta) = - log_joint(
 # Training
 n_iter = 10000
 n_chains = 1
-n_cycles = 4
+n_cycles = 2
 steps_per_cycle = Int(n_iter / n_cycles)
 n_iter_tot = n_iter
 z_dim = params_dict["tot_params"]
@@ -144,7 +162,7 @@ for chain in range(1, n_chains)
 
     # Optimizer
     optimizer = MyDecayedADAGrad()
-
+    optimizer = RMSProp()
 
     # --- Train loop ---
     converged = false
@@ -152,7 +170,8 @@ for chain in range(1, n_chains)
     store_step = 1
 
     prog = ProgressMeter.Progress(n_iter_tot, 1)
-    z = Float32.(randn(z_dim)) * sd_init
+    
+    z = Float32.(z_init(params_dict))
     z_trace = Float32.(zeros(z_dim, n_mcmc_samples))
 
     while (step ≤ n_iter_tot) && !converged
@@ -192,8 +211,7 @@ plot!(loss_trace[:, 2])
 plot!(loss_trace[:, 3])
 plot!(loss_trace[:, 4])
 
-plot(loss_trace[(n_iter - 1000):end, 1])
-plot!(loss_trace[(n_iter - 1000):end, 2])
+plot(loss_trace[all_iterations .== 1])
 
 
 priors = params_dict["priors"]
@@ -210,6 +228,7 @@ histogram(beta[p, :])
 histogram(beta[p-1, :])
 
 density(beta', label=false)
+cor(beta[p-10:p, :], dims=2)
 
 # Using the FDR criterion from MS
 fdr_target = 0.1

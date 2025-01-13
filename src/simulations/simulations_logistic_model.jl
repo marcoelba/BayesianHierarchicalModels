@@ -19,7 +19,7 @@ include(joinpath(abs_project_path, "src", "model_building", "mirror_statistic.jl
 include(joinpath(abs_project_path, "src", "utils", "mixed_models_data_generation.jl"))
 
 
-n_individuals = 300
+n_individuals = 500
 
 p = 500
 prop_non_zero = 0.05
@@ -257,10 +257,9 @@ for tau2 in tau2_vec
     # model predictions
     model(theta_components) = Predictors.linear_predictor(
         theta_components;
-        X=X_train,
+        X=X_train[1:100, :],
         link=identity
     )
-    model(theta_components)
 
     # model
     partial_log_joint(theta) = log_joint(
@@ -269,7 +268,7 @@ for tau2 in tau2_vec
         theta_axes=theta_axes,
         model=model,
         log_likelihood=DistributionsLogPdf.log_bernoulli_from_logit,
-        label=y_train
+        label=y_train[1:100, :]
     )
 
     # VI distribution
@@ -283,12 +282,14 @@ for tau2 in tau2_vec
         n_iter=2000,
         n_chains=1,
         samples_per_step=2,
-        sd_init=1f0,
+        sd_init=0.5f0,
         use_noisy_grads=false,
         n_cycles=1
     )
 
-    # plot(res["elbo_trace"][:, 1])
+    plot(res["elbo_trace"])
+    plot(res["elbo_trace"][2000:end, :])
+    Int.(res["best_iter"])
 
     vi_posterior = average_posterior(
         res["posteriors"],

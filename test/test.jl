@@ -134,3 +134,17 @@ end
 x = -3.
 link_logistic(x)
 link_probit(x, sigma=10.)
+
+
+# random noise #
+n = 100
+p = 1
+X = randn(n, p)
+y = 2 .+  X * 1 .+ randn(n)*0.5
+
+scatter(X, y)
+
+X\y
+
+Xrand = X .+ randn(size(X)) * 1.5
+scatter!(Xrand, y)
