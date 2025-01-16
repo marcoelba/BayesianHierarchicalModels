@@ -49,6 +49,8 @@ update_parameters_dict(
 )
 
 # beta fixed
+
+# CP
 update_parameters_dict(
     params_dict;
     name="hyper_sigma_beta",
@@ -78,6 +80,37 @@ update_parameters_dict(
         x, sigma=sigma
     ),
     dependency=["sigma_beta"]
+)
+
+# NCP
+update_parameters_dict(
+    params_dict;
+    name="hyper_sigma_beta",
+    dimension=(1, ),
+    bij=VectorizedBijectors.softplus,
+    log_prob_fun=x::Float32 -> DistributionsLogPdf.log_half_cauchy(
+        x, sigma=Float32.(1)
+    )
+)
+
+update_parameters_dict(
+    params_dict;
+    name="sigma_beta",
+    dimension=(p, ),
+    bij=VectorizedBijectors.softplus,
+    log_prob_fun=x::AbstractArray{Float32} -> DistributionsLogPdf.log_half_cauchy(
+        x, sigma=Float32.(ones(p) .* 1)
+    )
+)
+
+update_parameters_dict(
+    params_dict;
+    name="beta",
+    dimension=(p,),
+    log_prob_fun=(x::AbstractArray{Float32}, sigma::AbstractArray{Float32}, tau::Float32) -> DistributionsLogPdf.log_normal(
+        x, sigma=sigma .* tau
+    ),
+    dependency=["sigma_beta", "hyper_sigma_beta"]
 )
 
 theta_axes, _ = get_parameters_axes(params_dict)
@@ -257,7 +290,7 @@ for tau2 in tau2_vec
     # model predictions
     model(theta_components) = Predictors.linear_predictor(
         theta_components;
-        X=X_train[1:100, :],
+        X=X_train,
         link=identity
     )
 
@@ -268,7 +301,7 @@ for tau2 in tau2_vec
         theta_axes=theta_axes,
         model=model,
         log_likelihood=DistributionsLogPdf.log_bernoulli_from_logit,
-        label=y_train[1:100, :]
+        label=y_train
     )
 
     # VI distribution
@@ -315,13 +348,13 @@ for tau2 in tau2_vec
         mean_inclusion_per_coef,
         fdr_target
     )
-    push!(sum_coefs, sum((1 .- mean_inclusion_per_coef) .<= c_opt))
+    # push!(sum_coefs, sum((1 .- mean_inclusion_per_coef) .<= c_opt))
 
     metrics = MirrorStatistic.wrapper_metrics(
         data_dict["beta"] .!= 0.,
         selection
     )
-    push!(fdr, metrics.fdr)
+    # push!(fdr, metrics.fdr)
 
     samples_posterior = posterior_samples(
         vi_posterior=vi_posterior,

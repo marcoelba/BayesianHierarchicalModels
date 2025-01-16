@@ -93,7 +93,7 @@ update_parameters_dict(
     log_prob_fun=(x::AbstractArray{Float32}, sigma::AbstractArray{Float32}) -> DistributionsLogPdf.log_normal(
         x, sigma=sigma
     ),
-    init=randn(p) .* 0.01,
+    init=randn(p) .* 0.1,
     dependency=["sigma_beta"]
 )
 
@@ -127,7 +127,7 @@ partial_log_joint(theta) = - log_joint(
 )
 
 # Training
-n_iter = 10000
+n_iter = 20000
 n_chains = 1
 n_cycles = 2
 steps_per_cycle = Int(n_iter / n_cycles)
@@ -137,19 +137,21 @@ use_noisy_grads = true
 
 lr_schedule = cyclical_polynomial_decay(n_iter, n_cycles)
 
-freq_store = 5
+freq_store = 10
 z_store_cycle_schedule = Int.(range(steps_per_cycle / 2 + freq_store, steps_per_cycle, step=freq_store))
 if n_cycles > 1
-    z_store_schedule = vcat(
+    z_store_schedule = hcat(
         [z_store_cycle_schedule .+ (steps_per_cycle * cycle) for cycle = 1:(n_cycles - 1)]...
     )
+    z_store_schedule = hcat(z_store_cycle_schedule, z_store_schedule)
 else
     z_store_schedule = z_store_cycle_schedule
 end
+
 n_mcmc_samples = length(z_store_schedule)
 
 all_iterations = Int.(zeros(n_iter_tot))
-all_iterations[z_store_schedule] .= 1
+all_iterations[vcat(z_store_schedule...)] .= 1
 
 sd_init = Float32.(0.1)
 
@@ -162,7 +164,6 @@ for chain in range(1, n_chains)
 
     # Optimizer
     optimizer = MyDecayedADAGrad()
-    optimizer = RMSProp()
 
     # --- Train loop ---
     converged = false
@@ -206,13 +207,8 @@ for chain in range(1, n_chains)
 
 end
 
-plot(loss_trace[:, 1])
-plot!(loss_trace[:, 2])
-plot!(loss_trace[:, 3])
-plot!(loss_trace[:, 4])
-
+plot(loss_trace)
 plot(loss_trace[all_iterations .== 1])
-
 
 priors = params_dict["priors"]
 
@@ -240,11 +236,12 @@ s2 = setdiff(1:n_mcmc_samples, s1)
 beta_1 = beta[:, s1]
 beta_2 = beta[:, s2]
 mirror_coefficients = MirrorStatistic.mirror_statistic(beta_1, beta_2)
-plt_ms = scatter(mirror_coefficients[:, 1], label=false, markersize=3)
+plt_ms = scatter(mirror_coefficients[:, 1:100], label=false, markersize=3)
+density(mirror_coefficients', label=false)
 
 opt_t = 0
 t = 0
-for t in range(0., maximum(mirror_coefficients), length=2000)
+for t in range(0., maximum(mirror_coefficients), length=1000)
     n_left_tail = sum(mirror_coefficients .< -t)
     n_right_tail = sum(mirror_coefficients .> t)
     n_right_tail = ifelse(n_right_tail .> 0, n_right_tail, 1)
@@ -279,3 +276,5 @@ metrics = MirrorStatistic.wrapper_metrics(
     data_dict["beta"] .!= 0.,
     selection
 )
+
+density(beta[selection, :]', label=false)
