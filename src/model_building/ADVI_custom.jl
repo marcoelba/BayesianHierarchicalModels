@@ -7,6 +7,9 @@ using Bijectors
 using Distributions
 using LogExpFunctions
 
+abs_project_path = normpath(joinpath(@__FILE__, "..", "..", ".."))
+include(joinpath(abs_project_path, "src", "utils", "decayed_ada_grad.jl"))
+
 
 function LogExpFunctions.log1pexp(x::AbstractArray)
     LogExpFunctions.log1pexp.(x)
@@ -14,44 +17,59 @@ end
 
 
 function log_joint(theta; y, X)
-    pred = X * theta
-    -sum((y .- pred).^2)
-end
-X = randn(100, 3)
-y = X * [1, 2, 1] .+ randn(100)*0.5
+    pred = X * theta[1]
+    # lik = Distributions.MvNormal(pred, 1.)
 
-function vi_theta1(z::AbstractArray)
+    loglik = -sum((y .- pred).^2)
+
+    # prior
+    # logprior = sum(Distributions.logpdf.(Distributions.Normal(0., 1.), theta[1]))
+        # sum(Distributions.logpdf(truncated(Distributions.Normal(0., 1.), 0., Inf64), theta[2]))
+
+    return loglik
+end
+
+X = randn(100, 3)
+y = X * [1, 2, 1] .+ randn(100)
+p = 3
+
+function vi_theta_beta(z::AbstractArray)
+    zdim = length(z)
+    pdim = Int(zdim / 2)
+
     Bijectors.transformed(
-        Distributions.product_distribution(Distributions.Normal.(z[1:2], LogExpFunctions.log1pexp.(z[3:4]))),
+        Distributions.product_distribution(Distributions.Normal.(z[1:pdim], LogExpFunctions.log1pexp.(z[pdim+1:zdim]))),
         identity
     )
 end
 
-dd = vi_theta1([0, 1, 1, 0.5])
-z_1_dim = 4
-z_1_pos = 1:4
+dd = vi_theta_beta(randn(p*2))
+z_1_pos = 1:p*2
 rand(dd)
 rand(dd.dist)
 dd.transform
 
-function vi_theta2(z::AbstractArray)
+function vi_theta_sigma(z::AbstractArray)
     Bijectors.transformed(
         Distributions.Normal(z[1], LogExpFunctions.log1pexp.(z[2])),
-        LogExpFunctions.log1pexp
+        log1pexp
     )
 end
 
-dd2 = vi_theta2([0, -1])
-z_2_dim = 2
-z_2_pos = range(1, z_2_dim) .+ z_1_dim
+dd2 = vi_theta_sigma(randn(2))
+z_2_pos = range(1, 2) .+ p*2
 
 rand(dd2)
 rand(dd2.dist)
 dd2.transform
 
-range_z = [z_1_pos, z_2_pos]
-q_family_array = [vi_theta1, vi_theta2]
-z = randn(6)
+# 
+# range_z = [z_1_pos, z_2_pos]
+# vi_theta_sigma
+range_z = [z_1_pos]
+q_family_array = [vi_theta_beta]
+dim_z = 6
+z = randn(dim_z)
 
 
 function get_variational_dist(z::AbstractArray, q_family_array::AbstractArray, range_z::AbstractVector)
@@ -106,7 +124,7 @@ function rand_with_logjacobian(q_dist_array::AbstractArray)
     x_t = [q_dist_array[ii].transform(x[ii]) for ii in eachindex(x)]
     abs_jacobian = [Bijectors.jacobian(q_dist_array[ii].transform, x[ii], x_t[ii]) for ii in eachindex(x)]
 
-    return reduce(vcat, x_t), sum(abs_jacobian)
+    return x_t, sum(abs_jacobian)
 end
 
 # Entropy
@@ -124,10 +142,13 @@ function elbo(
 
     # get a specific distribution using the weights z, from the variational family 
     q_dist_array = get_variational_dist(z, q_family_array, range_z)
-    theta, abs_jacobian = rand_with_logjacobian(q_dist_array)
+    res = zero(eltype(z))
 
-    # evaluate the log-joint
-    res = log_joint(theta; y=y, X=X) + sum(abs_jacobian)
+    for mc = 1:n_samples
+        theta, abs_jacobian = rand_with_logjacobian(q_dist_array)
+        # evaluate the log-joint
+        res += (log_joint(theta; y=y, X=X) + sum(abs_jacobian)) / n_samples
+    end
 
     # add entropy
     for d in q_dist_array
@@ -137,16 +158,27 @@ function elbo(
     return -res
 end
 
-z = randn(6)
+
 elbo(
     z;
     q_family_array=q_family_array,
     log_joint=log_joint,
-    n_samples=1
+    n_samples=5
 )
 
+# test loop
+using Optimisers
 
-for iter = 1:100
+z = randn(dim_z) * 0.2
+
+opt = DecayedADAGrad()
+opt = Optimisers.Descent(0.01)
+state = Optimisers.setup(opt, z)
+
+n_iter = 1000
+z_trace = zeros(n_iter, length(z))
+loss = []
+for iter = 1:n_iter
     println(iter)
 
     train_loss, grads = Zygote.withgradient(z) do zp
@@ -154,22 +186,41 @@ for iter = 1:100
             zp;
             q_family_array=q_family_array,
             log_joint=log_joint,
-            n_samples=1
+            n_samples=5
         )
     end
 
+    push!(loss, train_loss)
     # z update
-    z = z .- 0.01 * grads[1]
+    Optimisers.update!(state, z, grads[1])
+    # @. z += opt.eta * grads[1]
+    z_trace[iter, :] = z
 end
+
+using StatsPlots
+plot(z_trace)
+plot(loss)
 
 # Get VI distribution
 q = get_variational_dist(z, q_family_array, range_z)
-theta = rand_array(q; from_base_dist=false, reduce_to_vec=true)
+theta = rand_array(q; from_base_dist=false, reduce_to_vec=false)
+
+log_joint(theta; y=y, X=X)
+
+log_joint([[1, 2, 1], 1]; y=y, X=X)
+X\y
 
 
-y, back = Zygote.pullback(f, θ)
-dy = first(back(1.0))
-DiffResults.value!(out, y)
-DiffResults.gradient!(out, dy)
+elbo(
+    z;
+    q_family_array=q_family_array,
+    log_joint=log_joint,
+    n_samples=10
+)
 
-return out
+elbo(
+    [1., 2., 1., 0.1, 0.1, 0.1];
+    q_family_array=q_family_array,
+    log_joint=log_joint,
+    n_samples=10
+)
