@@ -3,14 +3,28 @@
 module DistributionsLogPdf
 using LogExpFunctions: log1pexp
 
+
 function log_normal(
     x::AbstractArray{Float32},
-    m::AbstractArray{Float32}=Float32.(zeros(size(x))),
-    s::AbstractArray{Float32}=Float32.(ones(size(x)));
+    m::AbstractArray{Float32}=zeros(T, size(x)),
+    s::AbstractArray{Float32}=ones(T, size(x));
     mu::AbstractArray{Float32}=m,
-    sigma::AbstractArray{Float32}=s
+    sigma::AbstractArray{Float32}=s,
+    T::DataType=Float32
     )
     -0.5f0 * log.(2*Float32(pi)) .- log.(sigma) .- 0.5f0 * ((x .- mu) ./ sigma).^2f0
+end
+
+# product multivariate with same std
+function log_normal(
+    x::AbstractArray,
+    m::AbstractArray=zeros(T, size(x)),
+    s::Real=T(1.);
+    mu::AbstractArray=m,
+    sigma::Real=s,
+    T::DataType=Float32
+    )
+    -0.5f0 * log.(2*T(pi)) .- log.(sigma) .- 0.5f0 * ((x .- mu) ./ sigma).^2f0
 end
 
 function log_normal(
@@ -85,44 +99,5 @@ function log_normal_mixture(
     log.(s) .+ offset
 end
 
-"""
-Log-pdf of a mixture of Normal distributions.
-    x::AbstractArray{<:Float32}
-    w::AbstractArray{<:Float32}
-    mu::AbstractArray{<:Float32}
-    sd::AbstractArray{<:Float32}
-"""
-function log_normal_mixture(
-    x::AbstractArray{<:Float32},
-    w::AbstractArray{<:Float32},
-    mu::AbstractArray{<:Float32},
-    sd::AbstractArray{<:Float32}
-    )
-    f(x_array) = log_normal_mixture(x_array, w, mu, sd)
-    # log_normal_mixture.(x, Ref(w), Ref(mu), Ref(sd))
-    f.(x)
-end
-
-"""
-Log-likelihood of a mixture of Normal distributions (TEMP).
-    x::AbstractArray{<:Float32} (n x 1)
-    w::AbstractArray{<:Float32} (1 x n_clusters)
-    mu::AbstractArray{<:Float32} (n x n_clusters)
-    sd::AbstractArray{<:Float32} (n x n_clusters)
-"""
-function loglik_normal_mixture(
-    x::AbstractArray{<:Float32},
-    weights::AbstractArray{<:Float32},
-    mu::AbstractArray{<:Float32},
-    sigma::AbstractArray{<:Float32}
-    )
-
-    xstd = -0.5f0 .* ((x .- mu) ./ sigma).^2f0
-    wstd = weights ./ (sqrt(2f0 .* Float32(pi)) .* sigma)
-    offset = maximum(xstd .* wstd, dims=2)
-    xe = exp.(xstd .- offset)
-    s = sum(xe .* wstd, dims=2)
-    log.(s) .+ offset
-end
 
 end

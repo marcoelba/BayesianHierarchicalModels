@@ -9,17 +9,15 @@ using ADTypes
 using Zygote
 using AdvancedVI
 
-abs_project_path = normpath(joinpath(@__FILE__, "..", "..", ".."))
-include(joinpath(abs_project_path, "src", "utils", "decayed_ada_grad.jl"))
-
 
 function update_parameters_dict(
     params_dict::OrderedDict;
     name::String,
-    dimension::Tuple,
-    log_prob_fun,
-    bij=Base.identity,
-    init=bij(zeros(dimension)),
+    dim_theta::Tuple,
+    logpdf_prior,
+    dim_z::Int64,
+    vi_family,
+    init_z=randn(dim_z),
     dependency=[]
     )
 
@@ -37,33 +35,41 @@ function update_parameters_dict(
     # If first call
     if !("tot_params" in keys(params_dict))
         params_dict["tot_params"] = 0
-        params_dict["tot_params_t"] = 0
-        params_dict["ranges"] = []
-        params_dict["ranges_transformed"] = []
-        params_dict["bijectors"] = []
+        params_dict["ranges_theta"] = []
+
+        params_dict["tot_vi_weights"] = 0
+        params_dict["ranges_z"] = []
+        params_dict["vi_family_array"] = []
     end
 
     if !(parameter_already_included)
-        # first time call
-        range = (params_dict["tot_params"] + 1):(params_dict["tot_params"] + prod(dimension))
-        params_dict["tot_params"] = params_dict["tot_params"] + prod(dimension)
-        # after bijector
-        prototype = bij(ones(prod(dimension)))
-        range_transformed = (params_dict["tot_params_t"] + 1):(params_dict["tot_params_t"] + prod(size(prototype)))
-        params_dict["tot_params_t"] = params_dict["tot_params_t"] + prod(size(prototype))
+        
+        # first time call #
+
+        # theta
+        range_theta = (params_dict["tot_params"] + 1):(params_dict["tot_params"] + prod(dim_theta))
+        params_dict["tot_params"] = params_dict["tot_params"] + prod(dim_theta)
+        # range VI weights (z)
+        range_z = (params_dict["tot_vi_weights"] + 1):(params_dict["tot_vi_weights"] + dim_z)
+        params_dict["tot_vi_weights"] = params_dict["tot_vi_weights"] + dim_z
+
     else
-        range = params_dict["priors"][name]["range"]
+        range_theta = params_dict["priors"][name]["range_theta"]
         params_dict["tot_params"] = params_dict["tot_params"]
-        range_transformed = params_dict["priors"][name]["range_transformed"]
+        # VI weights
+        range_z = params_dict["priors"][name]["range_z"]
+        params_dict["tot_vi_weights"] = params_dict["tot_vi_weights"]
+
     end
 
     new_prior = OrderedDict(
-        "size" => dimension,
-        "bij" => bij,
-        "range" => range,
-        "range_transformed" => range_transformed,
-        "log_prob" => log_prob_fun,
-        "init" => init,
+        "dim_theta" => dim_theta,
+        "range_theta" => range_theta,
+        "logpdf_prior" => logpdf_prior,
+        "dim_z" => dim_z,
+        "range_z" => range_z,
+        "vi_family" => vi_family,
+        "init_z" => init_z,
         "dependency" => dependency
     )
 
@@ -71,13 +77,14 @@ function update_parameters_dict(
 
     # Create a tuple for the ranges and the transformations
     if !(parameter_already_included)
-        push!(params_dict["ranges"], params_dict["priors"][name]["range"])
-        push!(params_dict["ranges_transformed"], params_dict["priors"][name]["range_transformed"])
-        push!(params_dict["bijectors"], params_dict["priors"][name]["bij"])
+        push!(params_dict["ranges_theta"], params_dict["priors"][name]["range_theta"])
+        push!(params_dict["ranges_z"], params_dict["priors"][name]["range_z"])
+        push!(params_dict["vi_family_array"], params_dict["priors"][name]["vi_family"])
     end
     
     return params_dict
 end
+
 
 function get_parameters_axes(params_dict)
     
@@ -161,7 +168,7 @@ function log_joint(theta; params_dict, theta_axes, model, log_likelihood, label,
     log_prior = 0f0
     for prior in keys(priors)
         deps = priors[prior]["dependency"]
-        log_prior += sum(priors[prior]["log_prob"](
+        log_prior += sum(priors[prior]["logpdf_prior"](
             theta_components[prior],
             [theta_components[dep] for dep in deps]...
         ))
@@ -189,6 +196,7 @@ end
 function training_loop(;
     log_joint,
     vi_dist,
+    optimizer,
     z_dim::Int64,
     n_iter::Int64,
     n_chains::Int64=1,
@@ -212,8 +220,6 @@ function training_loop(;
 
         # Define objective
         variational_objective = AdvancedVI.ELBO()
-        # Optimizer
-        optimizer = MyDecayedADAGrad()
         # VI algorithm
         alg = AdvancedVI.ADVI(samples_per_step, n_iter_tot, adtype=ADTypes.AutoZygote())
 

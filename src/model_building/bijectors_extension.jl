@@ -22,3 +22,7 @@ function Bijectors.jacobian(t::typeof(identity), x::Real, xt::Real)
     logdetjac = zero(eltype(x))
     return logdetjac
 end
+
+function LogExpFunctions.log1pexp(x::AbstractArray)
+    LogExpFunctions.log1pexp.(x)
+end
