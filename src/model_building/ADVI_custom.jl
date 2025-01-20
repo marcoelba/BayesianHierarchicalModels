@@ -5,10 +5,12 @@ module ADVI
 using Zygote
 using Bijectors
 using Distributions
+using DistributionsAD
 using LogExpFunctions
+using StatsPlots
 
 abs_project_path = normpath(joinpath(@__FILE__, "..", "..", ".."))
-include(joinpath(abs_project_path, "src", "utils", "decayed_ada_grad.jl"))
+include(joinpath(abs_project_path, "src", "model_building", "my_optimisers.jl"))
 
 
 function LogExpFunctions.log1pexp(x::AbstractArray)
@@ -18,27 +20,33 @@ end
 
 function log_joint(theta; y, X)
     pred = X * theta[1]
-    # lik = Distributions.MvNormal(pred, 1.)
 
-    loglik = -sum((y .- pred).^2)
+    loglik = sum(Distributions.logpdf(
+        DistributionsAD.MvNormal(pred, theta[2]),
+        y
+    ))
 
-    # prior
-    # logprior = sum(Distributions.logpdf.(Distributions.Normal(0., 1.), theta[1]))
-        # sum(Distributions.logpdf(truncated(Distributions.Normal(0., 1.), 0., Inf64), theta[2]))
+    logprior = sum(DistributionsAD.logpdf.(DistributionsAD.Normal(0., 1.), theta[1]))
+        sum(DistributionsAD.logpdf(truncated(DistributionsAD.Normal(0., 1.), 0., Inf64), theta[2]))
 
-    return loglik
+    return loglik + logprior
 end
 
 X = randn(100, 3)
 y = X * [1, 2, 1] .+ randn(100)
 p = 3
 
+
+# Variational Distributions
 function vi_theta_beta(z::AbstractArray)
     zdim = length(z)
     pdim = Int(zdim / 2)
 
     Bijectors.transformed(
-        Distributions.product_distribution(Distributions.Normal.(z[1:pdim], LogExpFunctions.log1pexp.(z[pdim+1:zdim]))),
+        DistributionsAD.MvNormal(
+            z[1:pdim],
+            LogExpFunctions.log1pexp.(z[pdim+1:zdim])
+        ),
         identity
     )
 end
@@ -49,9 +57,10 @@ rand(dd)
 rand(dd.dist)
 dd.transform
 
+
 function vi_theta_sigma(z::AbstractArray)
     Bijectors.transformed(
-        Distributions.Normal(z[1], LogExpFunctions.log1pexp.(z[2])),
+        DistributionsAD.Normal(z[1], LogExpFunctions.log1pexp.(z[2])),
         log1pexp
     )
 end
@@ -64,11 +73,9 @@ rand(dd2.dist)
 dd2.transform
 
 # 
-# range_z = [z_1_pos, z_2_pos]
-# vi_theta_sigma
-range_z = [z_1_pos]
-q_family_array = [vi_theta_beta]
-dim_z = 6
+range_z = [z_1_pos, z_2_pos]
+q_family_array = [vi_theta_beta, vi_theta_sigma]
+dim_z = 8
 z = randn(dim_z)
 
 
@@ -142,8 +149,9 @@ function elbo(
 
     # get a specific distribution using the weights z, from the variational family 
     q_dist_array = get_variational_dist(z, q_family_array, range_z)
-    res = zero(eltype(z))
 
+    # evaluate the log-joint
+    res = zero(eltype(z))
     for mc = 1:n_samples
         theta, abs_jacobian = rand_with_logjacobian(q_dist_array)
         # evaluate the log-joint
@@ -158,7 +166,6 @@ function elbo(
     return -res
 end
 
-
 elbo(
     z;
     q_family_array=q_family_array,
@@ -171,8 +178,12 @@ using Optimisers
 
 z = randn(dim_z) * 0.2
 
-opt = DecayedADAGrad()
+opt = MyOptimisers.DecayedADAGrad()
+
+opt = Optimisers.Adam()
+
 opt = Optimisers.Descent(0.01)
+
 state = Optimisers.setup(opt, z)
 
 n_iter = 1000
@@ -197,7 +208,6 @@ for iter = 1:n_iter
     z_trace[iter, :] = z
 end
 
-using StatsPlots
 plot(z_trace)
 plot(loss)
 
@@ -207,19 +217,8 @@ theta = rand_array(q; from_base_dist=false, reduce_to_vec=false)
 
 log_joint(theta; y=y, X=X)
 
-log_joint([[1, 2, 1], 1]; y=y, X=X)
-X\y
-
-
 elbo(
     z;
-    q_family_array=q_family_array,
-    log_joint=log_joint,
-    n_samples=10
-)
-
-elbo(
-    [1., 2., 1., 0.1, 0.1, 0.1];
     q_family_array=q_family_array,
     log_joint=log_joint,
     n_samples=10

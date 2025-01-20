@@ -1,3 +1,5 @@
+module MyOptimisers
+
 using Optimisers
 
 
@@ -70,4 +72,6 @@ function Optimisers.apply!(o::DecayedADAGrad, state, x::AbstractArray, dx)
     @. dx *= η / (√acc + ϵ)
 
     return acc, dx
+end
+
 end
