@@ -69,6 +69,7 @@ update_parameters_dict(
 
 
 # Variational Distributions
+params_dict["priors"]
 params_dict["priors"]["sigma_y"]["vi_family"]([1, -1])
 
 params_dict["vi_family_array"]
@@ -101,72 +102,55 @@ end
 
 pred = model(theta, X=X)
 
-DistributionsLogPdf.log_normal(y, pred..., T=Float64)
+DistributionsLogPdf.log_normal(y, pred...)
 
 
 # joint prior
-function log_prior(theta::AbstractArray)
-
-    logprior = sum(DistributionsAD.logpdf.(DistributionsAD.Normal(0., 1.), theta[1])) +
-        sum(DistributionsAD.logpdf(truncated(DistributionsAD.Normal(0., 1.), 0., Inf64), theta[2]))
-    
-    return logprior
-end
+compute_logpdf_prior(theta; params_dict=params_dict)
 
 elbo(z;
     y=y,
     X=X,
     ranges_z=params_dict["ranges_z"],
-    q_family_array=params_dict["vi_family_array"],
+    vi_family_array=params_dict["vi_family_array"],
     model,
     log_likelihood=DistributionsLogPdf.log_normal,
-    log_prior=x->zero(1.),
+    log_prior=x::AbstractArray -> compute_logpdf_prior(x; params_dict=params_dict),
     n_samples=10
 )
 
 
 # test loop
 
-z = randn(dim_z) * 0.2
+z = randn(params_dict["tot_vi_weights"]) * 0.2
+optimiser = MyOptimisers.DecayedADAGrad()
 
-opt = MyOptimisers.DecayedADAGrad()
+res = hybrid_training_loop(
+    z=z,
+    y=y,
+    X=X,
+    ranges_z=params_dict["ranges_z"],
+    vi_family_array=params_dict["vi_family_array"],
+    model=model,
+    log_likelihood=DistributionsLogPdf.log_normal,
+    log_prior=x::AbstractArray -> compute_logpdf_prior(x; params_dict=params_dict),
+    n_iter=1000,
+    optimiser=optimiser,
+    save_all=true,
+    use_noisy_grads=false,
+    elbo_samples=3
+)
 
-state = Optimisers.setup(opt, z)
-
-n_iter = 1000
-z_trace = zeros(n_iter, length(z))
-loss = []
-for iter = 1:n_iter
-    println(iter)
-
-    train_loss, grads = Zygote.withgradient(z) do zp
-        elbo(
-            zp;
-            q_family_array=q_family_array,
-            log_joint=log_joint,
-            n_samples=5
-        )
-    end
-
-    push!(loss, train_loss)
-    # z update
-    Optimisers.update!(state, z, grads[1])
-    # @. z += opt.eta * grads[1]
-    z_trace[iter, :] = z
-end
-
-plot(z_trace)
-plot(loss)
+plot(res["loss_dict"]["z_trace"])
+plot(res["loss_dict"]["loss"])
 
 # Get VI distribution
-q = get_variational_dist(z, q_family_array, range_z)
-theta = rand_array(q; from_base_dist=false, reduce_to_vec=false)
+res["best_iter_dict"]["best_iter"]
+res["best_iter_dict"]["best_z"]
 
-log_joint(theta; y=y, X=X)
-
-elbo(
-    z;
-    q_family_array=q_family_array,
-    log_joint=log_joint,
-    n_samples=10
+q = VariationalDistributions.get_variational_dist(
+    res["best_iter_dict"]["best_z"],
+    params_dict["vi_family_array"],
+    params_dict["ranges_z"]
 )
+theta = VariationalDistributions.rand_array(q; reduce_to_vec=false)

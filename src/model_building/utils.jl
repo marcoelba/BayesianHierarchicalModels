@@ -40,6 +40,8 @@ function update_parameters_dict(
         params_dict["tot_vi_weights"] = 0
         params_dict["ranges_z"] = []
         params_dict["vi_family_array"] = []
+
+        params_dict["keys_prior_position"] = OrderedDict()
     end
 
     if !(parameter_already_included)
@@ -80,6 +82,9 @@ function update_parameters_dict(
         push!(params_dict["ranges_theta"], params_dict["priors"][name]["range_theta"])
         push!(params_dict["ranges_z"], params_dict["priors"][name]["range_z"])
         push!(params_dict["vi_family_array"], params_dict["priors"][name]["vi_family"])
+
+        params_dict["keys_prior_position"][Symbol(name)] = length(params_dict["vi_family_array"])
+        params_dict["tuple_prior_position"] = (; params_dict["keys_prior_position"]...)
     end
     
     return params_dict

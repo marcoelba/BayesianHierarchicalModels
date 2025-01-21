@@ -1,7 +1,7 @@
 # training utils
 using ProgressMeter
 using Zygote
-
+using Optimisers
 
 
 function polynomial_decay(t::Int64; a::Float32=1f0, b::Float32=0.01f0, gamma::Float32=0.75f0)
@@ -19,14 +19,16 @@ function cyclical_polynomial_decay(n_iter::Int64, n_cycles::Int64=2)
 end
 
 
-function compute_logpdf_prior(theta::AbstractArray; priors::AbstractArray)
+function compute_logpdf_prior(theta::AbstractArray; params_dict::OrderedDict)
     log_prior = 0f0
+    priors = params_dict["priors"]
+    tuple_name = params_dict["tuple_prior_position"]
 
     for (ii, prior) in enumerate(keys(priors))
         deps = priors[prior]["dependency"]
         log_prior += sum(priors[prior]["logpdf_prior"](
             theta[ii],
-            [theta[dep] for dep in deps]...
+            [theta[tuple_name[Symbol(dep)]] for dep in deps]...
         ))
     end
 
@@ -81,18 +83,20 @@ function hybrid_training_loop(;
     model,
     log_likelihood,
     log_prior=zero,
-    elbo_samples::Int64=1
     n_iter::Int64,
     optimiser::Optimisers.AbstractRule,
     save_all::Bool=false,
-    use_noisy_grads::Bool=false
+    use_noisy_grads::Bool=false,
+    elbo_samples::Int64=1,
+    lr_schedule=nothing
     )
 
     # store best setting
     best_z = copy(z)
     best_loss = eltype(z)(Inf)
+    best_iter = 1
 
-    lr_schedule = cyclical_polynomial_decay(n_iter, n_cycles)
+    # lr_schedule = cyclical_polynomial_decay(n_iter, n_cycles)
     state = Optimisers.setup(optimiser, z)
 
     prog = ProgressMeter.Progress(n_iter, 1)
@@ -102,7 +106,7 @@ function hybrid_training_loop(;
     if save_all
         z_trace = zeros(eltype(z), n_iter, length(z))
     else
-        z_trace = 0. 
+        z_trace = nothing
     end
     loss = []
     
@@ -136,7 +140,7 @@ function hybrid_training_loop(;
         end
         
         # elbo check
-        if train_loss > best_loss
+        if train_loss < best_loss
             best_loss = copy(train_loss)
             best_z = copy(z)
             best_iter = copy(iter)
@@ -151,6 +155,7 @@ function hybrid_training_loop(;
     best_iter_dict = Dict(
         "best_loss" => best_loss,
         "best_z" => best_z,
+        "final_z" => z,
         "best_iter" => best_iter
     )
 

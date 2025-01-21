@@ -5,12 +5,11 @@ using LogExpFunctions: log1pexp
 
 
 function log_normal(
-    x::AbstractArray{Float32},
-    m::AbstractArray{Float32}=zeros(T, size(x)),
-    s::AbstractArray{Float32}=ones(T, size(x));
-    mu::AbstractArray{Float32}=m,
-    sigma::AbstractArray{Float32}=s,
-    T::DataType=Float32
+    x::AbstractArray,
+    m::AbstractArray=zeros(eltype(x), size(x)),
+    s::AbstractArray=ones(eltype(x), size(x));
+    mu::AbstractArray=m,
+    sigma::AbstractArray=s
     )
     -0.5f0 * log.(2*Float32(pi)) .- log.(sigma) .- 0.5f0 * ((x .- mu) ./ sigma).^2f0
 end
@@ -18,19 +17,18 @@ end
 # product multivariate with same std
 function log_normal(
     x::AbstractArray,
-    m::AbstractArray=zeros(T, size(x)),
-    s::Real=T(1.);
+    m::AbstractArray=zeros(eltype(x), size(x)),
+    s::Real=one(eltype(x));
     mu::AbstractArray=m,
-    sigma::Real=s,
-    T::DataType=Float32
+    sigma::Real=s
     )
-    -0.5f0 * log.(2*T(pi)) .- log.(sigma) .- 0.5f0 * ((x .- mu) ./ sigma).^2f0
+    -0.5f0 * log.(2*Float32(pi)) .- log.(sigma) .- 0.5f0 * ((x .- mu) ./ sigma).^2f0
 end
 
 function log_normal(
-    x::Float32,
-    mu::Float32=0f0,
-    sigma::Float32=1f0
+    x::Real,
+    mu::Real=0f0,
+    sigma::Real=1f0
     )
     -0.5f0 * log(2*Float32(pi)) - log(sigma) - 0.5f0 * ((x - mu) / sigma)^2f0
 end
