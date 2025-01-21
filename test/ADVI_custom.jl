@@ -20,13 +20,23 @@ include(joinpath(abs_project_path, "src", "model_building", "plot_utils.jl"))
 include(joinpath(abs_project_path, "src", "model_building", "bijectors_extension.jl"))
 include(joinpath(abs_project_path, "src", "model_building", "variational_distributions.jl"))
 include(joinpath(abs_project_path, "src", "model_building", "distributions_logpdf.jl"))
+include(joinpath(abs_project_path, "src", "utils", "mixed_models_data_generation.jl"))
 
 
 
 # data
-X = randn(100, 3)
-y = 1. .+ X * [1, 2, 1] .+ randn(100)
-p = 3
+n_individuals = 200
+p = 200
+prop_non_zero = 0.1
+p1 = Int(p * prop_non_zero)
+p0 = p - p1
+corr_factor = 0.5
+
+data_dict = generate_linear_model_data(
+    n_individuals=n_individuals,
+    p=p, p1=p1, p0=p0, corr_factor=corr_factor,
+    random_seed=134
+)
 
 
 " Model definition "
@@ -41,17 +51,41 @@ update_parameters_dict(
     dim_theta=(1, ),
     logpdf_prior=x::Real -> DistributionsLogPdf.log_normal(x),
     dim_z=2,
-    vi_family=z::AbstractArray -> VariationalDistributions.vi_normal(z; bij=identity)
+    vi_family=z::AbstractArray -> VariationalDistributions.vi_normal(z; bij=identity),
+    init_z=[0., 0.1]
 )
 
 # beta fixed
 update_parameters_dict(
     params_dict;
+    name="tau_beta",
+    dim_theta=(1, ),
+    logpdf_prior=x::Real -> DistributionsLogPdf.log_half_cauchy(x, sigma=1.),
+    dim_z=2,
+    vi_family=z::AbstractArray -> VariationalDistributions.vi_normal(z; bij=LogExpFunctions.log1pexp),
+    init_z=vcat(0.1, 0.1)
+)
+
+update_parameters_dict(
+    params_dict;
+    name="sigma_beta",
+    dim_theta=(p, ),
+    logpdf_prior=(x::AbstractArray, tau::Real) -> DistributionsLogPdf.log_half_cauchy(x, sigma=tau .* ones(p)),
+    dim_z=p*2,
+    vi_family=z::AbstractArray -> VariationalDistributions.vi_mv_normal(z; bij=LogExpFunctions.log1pexp),
+    init_z=vcat(randn(p)*0.1, randn(p)*0.1),
+    dependency=["tau_beta"]
+)
+
+update_parameters_dict(
+    params_dict;
     name="beta",
     dim_theta=(p, ),
-    logpdf_prior=x::AbstractArray -> DistributionsLogPdf.log_normal(x),
+    logpdf_prior=(x::AbstractArray, sigma::AbstractArray) -> DistributionsLogPdf.log_normal(x, sigma=sigma),
     dim_z=p*2,
-    vi_family=z::AbstractArray -> VariationalDistributions.vi_mv_normal(z; bij=identity)
+    vi_family=z::AbstractArray -> VariationalDistributions.vi_mv_normal(z; bij=identity),
+    init_z=vcat(randn(p)*0.1, randn(p)*0.1 .- 1),
+    dependency=["sigma_beta"]
 )
 
 # sigma y
@@ -64,7 +98,8 @@ update_parameters_dict(
         x
     ),
     dim_z=2,
-    vi_family=z::AbstractArray -> VariationalDistributions.vi_normal(z; bij=LogExpFunctions.log1pexp)
+    vi_family=z::AbstractArray -> VariationalDistributions.vi_normal(z; bij=LogExpFunctions.log1pexp),
+    init_z=vcat(1., 0.5)
 )
 
 
@@ -77,7 +112,7 @@ params_dict["ranges_z"]
 params_dict["tot_vi_weights"]
 
 # get ONE VI distribution
-z = randn(params_dict["tot_vi_weights"])
+z = VariationalDistributions.get_init_z(params_dict, dtype=Float64)
 q_dist_array = VariationalDistributions.get_variational_dist(z, params_dict["vi_family_array"], params_dict["ranges_z"])
 
 # sample
@@ -95,22 +130,21 @@ end
 
 
 # Model prediction
-function model(theta::AbstractArray; X::AbstractArray)
-    mu = X * theta[2] .+ theta[1]
-    return (mu, theta[3])
+function model(theta::AbstractArray; X::AbstractArray, prior_position=params_dict["tuple_prior_position"])
+    mu = X * theta[prior_position[:beta]] .+ theta[prior_position[:beta0]]
+    return (mu, theta[prior_position[:sigma_y]] .* ones(eltype(X), size(X, 1)))
 end
 
-pred = model(theta, X=X)
+pred = model(theta, X=data_dict["X"])
 
-DistributionsLogPdf.log_normal(y, pred...)
-
+DistributionsLogPdf.log_normal(data_dict["y"], pred...)
 
 # joint prior
 compute_logpdf_prior(theta; params_dict=params_dict)
 
 elbo(z;
-    y=y,
-    X=X,
+    y=data_dict["y"],
+    X=data_dict["X"],
     ranges_z=params_dict["ranges_z"],
     vi_family_array=params_dict["vi_family_array"],
     model,
@@ -122,13 +156,13 @@ elbo(z;
 
 # test loop
 
-z = randn(params_dict["tot_vi_weights"]) * 0.2
+z = VariationalDistributions.get_init_z(params_dict, dtype=Float64)
 optimiser = MyOptimisers.DecayedADAGrad()
 
 res = hybrid_training_loop(
     z=z,
-    y=y,
-    X=X,
+    y=data_dict["y"],
+    X=data_dict["X"],
     ranges_z=params_dict["ranges_z"],
     vi_family_array=params_dict["vi_family_array"],
     model=model,
@@ -147,6 +181,7 @@ plot(res["loss_dict"]["loss"])
 # Get VI distribution
 res["best_iter_dict"]["best_iter"]
 res["best_iter_dict"]["best_z"]
+res["best_iter_dict"]["final_z"]
 
 q = VariationalDistributions.get_variational_dist(
     res["best_iter_dict"]["best_z"],
@@ -154,3 +189,9 @@ q = VariationalDistributions.get_variational_dist(
     params_dict["ranges_z"]
 )
 theta = VariationalDistributions.rand_array(q; reduce_to_vec=false)
+
+beta = rand(q[4], 1000)
+density(beta', label=false)
+
+lambda = rand(q[3], 1000)
+density(lambda', label=false)

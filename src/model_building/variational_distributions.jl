@@ -13,6 +13,16 @@ function get_variational_dist(z::AbstractArray, q_family_array::AbstractArray, r
 end
 
 
+function get_init_z(params_dict; dtype=Float64)
+    z = []
+    for prior in keys(params_dict["priors"])
+        append!(z, params_dict["priors"][prior]["init_z"])
+    end
+
+    return dtype.(z)
+end
+
+
 function rand_array(q_dist_array::AbstractArray; from_base_dist::Bool=false, reduce_to_vec::Bool=false)
     if from_base_dist
         v_sample = [rand(dist.dist) for dist in q_dist_array]

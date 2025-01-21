@@ -32,7 +32,7 @@ function compute_logpdf_prior(theta::AbstractArray; params_dict::OrderedDict)
         ))
     end
 
-    return log_prior 
+    return log_prior
 end
 
 
