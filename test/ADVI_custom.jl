@@ -19,6 +19,7 @@ include(joinpath(abs_project_path, "src", "model_building", "plot_utils.jl"))
 
 include(joinpath(abs_project_path, "src", "model_building", "bijectors_extension.jl"))
 include(joinpath(abs_project_path, "src", "model_building", "variational_distributions.jl"))
+
 include(joinpath(abs_project_path, "src", "model_building", "distributions_logpdf.jl"))
 include(joinpath(abs_project_path, "src", "utils", "mixed_models_data_generation.jl"))
 
@@ -76,6 +77,29 @@ update_parameters_dict(
     init_z=vcat(randn(p)*0.1, randn(p)*0.1),
     dependency=["tau_beta"]
 )
+
+# Constant Distribution
+update_parameters_dict(
+    params_dict;
+    name="tau_beta",
+    dim_theta=(1, ),
+    logpdf_prior=x::Real -> DistributionsLogPdf.log_half_cauchy(x, sigma=1.),
+    dim_z=1,
+    vi_family=z::AbstractArray -> VariationalDistributions.vi_constant_normal(z; bij=LogExpFunctions.log1pexp),
+    init_z=vcat(0.1, )
+)
+
+update_parameters_dict(
+    params_dict;
+    name="sigma_beta",
+    dim_theta=(p, ),
+    logpdf_prior=(x::AbstractArray, tau::Real) -> DistributionsLogPdf.log_half_cauchy(x, sigma=tau .* ones(p)),
+    dim_z=p,
+    vi_family=z::AbstractArray -> VariationalDistributions.vi_constant_mv_normal(z; bij=LogExpFunctions.log1pexp),
+    init_z=randn(p)*0.1,
+    dependency=["tau_beta"]
+)
+
 
 update_parameters_dict(
     params_dict;
@@ -177,8 +201,10 @@ res = hybrid_training_loop(
 
 plot(res["loss_dict"]["z_trace"])
 plot(res["loss_dict"]["loss"])
+plot(res["loss_dict"]["loss"][500:end])
 
 # Get VI distribution
+res["best_iter_dict"]["best_iter"]
 res["best_iter_dict"]["best_iter"]
 res["best_iter_dict"]["best_z"]
 res["best_iter_dict"]["final_z"]
@@ -194,6 +220,11 @@ prior_position = params_dict["tuple_prior_position"]
 
 beta = rand(q[prior_position[:beta]], 1000)
 density(beta', label=false)
+
+# lambda
+rand(q[prior_position[:sigma_beta]])
+# tau
+rand(q[prior_position[:tau_beta]])
 
 # Mirror statistic
 include(joinpath(abs_project_path, "src", "model_building", "mirror_statistic.jl"))

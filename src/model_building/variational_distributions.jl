@@ -6,6 +6,10 @@ using Bijectors
 using StatsFuns
 using LogExpFunctions
 
+abs_project_path = normpath(joinpath(@__FILE__, "..", "..", ".."))
+include(joinpath(abs_project_path, "src", "model_building", "normal_degenerate.jl"))
+
+
 
 function get_variational_dist(z::AbstractArray, q_family_array::AbstractArray, range_z::AbstractVector)
     q_vi = [q_family_array[cc](z[range_z[cc]]) for cc in eachindex(q_family_array)]
@@ -75,12 +79,29 @@ function vi_mv_normal(z::AbstractArray; bij=identity)
 end
 
 
+function vi_constant_mv_normal(z::AbstractArray; bij=identity)
+    Bijectors.transformed(
+        MultivariateConstantDistribution(
+            z
+        ),
+        bij
+    )
+end
+
+
 function vi_normal(z::AbstractArray; bij=identity)
     Bijectors.transformed(
         DistributionsAD.Normal(
             z[1],
             LogExpFunctions.log1pexp.(z[2])
         ),
+        bij
+    )
+end
+
+function vi_constant_normal(z::AbstractArray; bij=identity)
+    Bijectors.transformed(
+        ConstantDistribution(z[1]),
         bij
     )
 end
