@@ -25,8 +25,8 @@ include(joinpath(abs_project_path, "src", "utils", "mixed_models_data_generation
 
 
 # data
-n_individuals = 200
-p = 200
+n_individuals = 300
+p = 100
 prop_non_zero = 0.1
 p1 = Int(p * prop_non_zero)
 p0 = p - p1
@@ -84,7 +84,7 @@ update_parameters_dict(
     logpdf_prior=(x::AbstractArray, sigma::AbstractArray) -> DistributionsLogPdf.log_normal(x, sigma=sigma),
     dim_z=p*2,
     vi_family=z::AbstractArray -> VariationalDistributions.vi_mv_normal(z; bij=identity),
-    init_z=vcat(randn(p)*0.1, randn(p)*0.1 .- 1),
+    init_z=vcat(randn(p)*0.5, randn(p)*0.1),
     dependency=["sigma_beta"]
 )
 
@@ -168,11 +168,11 @@ res = hybrid_training_loop(
     model=model,
     log_likelihood=DistributionsLogPdf.log_normal,
     log_prior=x::AbstractArray -> compute_logpdf_prior(x; params_dict=params_dict),
-    n_iter=1000,
+    n_iter=2000,
     optimiser=optimiser,
-    save_all=true,
+    save_all=false,
     use_noisy_grads=false,
-    elbo_samples=3
+    elbo_samples=5
 )
 
 plot(res["loss_dict"]["z_trace"])
@@ -190,8 +190,55 @@ q = VariationalDistributions.get_variational_dist(
 )
 theta = VariationalDistributions.rand_array(q; reduce_to_vec=false)
 
-beta = rand(q[4], 1000)
+prior_position = params_dict["tuple_prior_position"]
+
+beta = rand(q[prior_position[:beta]], 1000)
 density(beta', label=false)
 
-lambda = rand(q[3], 1000)
-density(lambda', label=false)
+# Mirror statistic
+include(joinpath(abs_project_path, "src", "model_building", "mirror_statistic.jl"))
+
+ms_dist = MirrorStatistic.posterior_ms_coefficients(q[prior_position[:beta]].dist)
+
+metrics = MirrorStatistic.optimal_inclusion(
+    ms_dist_vec=ms_dist,
+    mc_samples=1000,
+    beta_true=data_dict["beta"],
+    fdr_target=0.1
+)
+
+
+boxplot(metrics.fdr_distribution, label="FDR")
+boxplot!(metrics.tpr_distribution, label="TPR")
+
+plt = fdr_n_hist(metrics)
+
+n_inclusion_per_coef = sum(metrics.inclusion_matrix, dims=2)[:,1]
+mean_inclusion_per_coef = mean(metrics.inclusion_matrix, dims=2)[:,1]
+
+c_opt, selection = MirrorStatistic.posterior_fdr_threshold(
+    mean_inclusion_per_coef,
+    0.1
+)
+sum((1 .- mean_inclusion_per_coef) .<= c_opt)
+
+metrics = MirrorStatistic.wrapper_metrics(
+    data_dict["beta"] .!= 0.,
+    selection
+)
+
+plt_probs = scatter(
+    findall((1 .- mean_inclusion_per_coef) .> c_opt),
+    mean_inclusion_per_coef[findall((1 .- mean_inclusion_per_coef) .> c_opt)],
+    label=false, markersize=3,
+)
+scatter!(
+    findall((1 .- mean_inclusion_per_coef) .<= c_opt),
+    mean_inclusion_per_coef[findall((1 .- mean_inclusion_per_coef) .<= c_opt)],
+    label="Selected", markersize=5,
+)
+xlabel!("Coefficients", labelfontsize=15)
+ylabel!("Inclusion Probability", labelfontsize=15)
+vspan!(plt_probs, [p0+1, p], color = :green, alpha = 0.2, labels = "true active coefficients")
+display(plt_probs)
+savefig(plt_probs, joinpath(abs_project_path, "results", "ms_analysis", "$(label_files)_mean_selection_matrix.pdf"))
