@@ -18,7 +18,8 @@ function update_parameters_dict(
     dim_z::Int64,
     vi_family,
     init_z=randn(dim_z),
-    dependency=[]
+    dependency=[],
+    random_variable::Bool=true
     )
 
     if !("priors" in keys(params_dict))
@@ -42,6 +43,7 @@ function update_parameters_dict(
         params_dict["vi_family_array"] = []
 
         params_dict["keys_prior_position"] = OrderedDict()
+        params_dict["random_weights"] = []
     end
 
     if !(parameter_already_included)
@@ -72,7 +74,8 @@ function update_parameters_dict(
         "range_z" => range_z,
         "vi_family" => vi_family,
         "init_z" => init_z,
-        "dependency" => dependency
+        "dependency" => dependency,
+        "random_variable" => random_variable
     )
 
     params_dict["priors"][name] = new_prior
@@ -82,6 +85,7 @@ function update_parameters_dict(
         push!(params_dict["ranges_theta"], params_dict["priors"][name]["range_theta"])
         push!(params_dict["ranges_z"], params_dict["priors"][name]["range_z"])
         push!(params_dict["vi_family_array"], params_dict["priors"][name]["vi_family"])
+        push!(params_dict["random_weights"], params_dict["priors"][name]["random_variable"])
 
         params_dict["keys_prior_position"][Symbol(name)] = length(params_dict["vi_family_array"])
         params_dict["tuple_prior_position"] = (; params_dict["keys_prior_position"]...)

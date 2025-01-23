@@ -42,12 +42,16 @@ function rand_array(q_dist_array::AbstractArray; from_base_dist::Bool=false, red
 end
 
 
-function rand_with_logjacobian(q_dist_array::AbstractArray)
+function rand_with_logjacobian(q_dist_array::AbstractArray; random_weights::AbstractArray)
     x = rand_array(q_dist_array, from_base_dist=true, reduce_to_vec=false)
     x_t = [q_dist_array[ii].transform(x[ii]) for ii in eachindex(x)]
-    abs_jacobian = [Bijectors.jacobian(q_dist_array[ii].transform, x[ii], x_t[ii]) for ii in eachindex(x)]
 
-    return x_t, sum(abs_jacobian)
+    abs_jacobian = zero(eltype(x[1]))
+    for ii in eachindex(x)
+        abs_jacobian += random_weights[ii] * Bijectors.jacobian(q_dist_array[ii].transform, x[ii], x_t[ii])
+    end
+
+    return x_t, abs_jacobian
 end
 
 

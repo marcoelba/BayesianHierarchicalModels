@@ -86,7 +86,8 @@ update_parameters_dict(
     logpdf_prior=x::Real -> DistributionsLogPdf.log_half_cauchy(x, sigma=1.),
     dim_z=1,
     vi_family=z::AbstractArray -> VariationalDistributions.vi_constant_normal(z; bij=LogExpFunctions.log1pexp),
-    init_z=vcat(0.1, )
+    init_z=vcat(0.1, ),
+    random_variable=false
 )
 
 update_parameters_dict(
@@ -96,8 +97,9 @@ update_parameters_dict(
     logpdf_prior=(x::AbstractArray, tau::Real) -> DistributionsLogPdf.log_half_cauchy(x, sigma=tau .* ones(p)),
     dim_z=p,
     vi_family=z::AbstractArray -> VariationalDistributions.vi_constant_mv_normal(z; bij=LogExpFunctions.log1pexp),
-    init_z=randn(p)*0.1,
-    dependency=["tau_beta"]
+    init_z=LogExpFunctions.log1pexp(randn(p)*0.1 .- 1),
+    dependency=["tau_beta"],
+    random_variable=false
 )
 
 
@@ -134,6 +136,7 @@ params_dict["priors"]["sigma_y"]["vi_family"]([1, -1])
 params_dict["vi_family_array"]
 params_dict["ranges_z"]
 params_dict["tot_vi_weights"]
+params_dict["random_weights"]
 
 # get ONE VI distribution
 z = VariationalDistributions.get_init_z(params_dict, dtype=Float64)
@@ -145,7 +148,7 @@ theta = VariationalDistributions.rand_array(q_dist_array, reduce_to_vec=false)
 VariationalDistributions.rand_array(q_dist_array, from_base_dist=true)
 
 # sample with log-jacobian
-VariationalDistributions.rand_with_logjacobian(q_dist_array)
+VariationalDistributions.rand_with_logjacobian(q_dist_array, random_weights=params_dict["random_weights"])
 
 # Entropy
 for dist in q_dist_array
@@ -171,6 +174,7 @@ elbo(z;
     X=data_dict["X"],
     ranges_z=params_dict["ranges_z"],
     vi_family_array=params_dict["vi_family_array"],
+    random_weights=params_dict["random_weights"],
     model,
     log_likelihood=DistributionsLogPdf.log_normal,
     log_prior=x::AbstractArray -> compute_logpdf_prior(x; params_dict=params_dict),
@@ -187,12 +191,11 @@ res = hybrid_training_loop(
     z=z,
     y=data_dict["y"],
     X=data_dict["X"],
-    ranges_z=params_dict["ranges_z"],
-    vi_family_array=params_dict["vi_family_array"],
+    params_dict=params_dict,
     model=model,
     log_likelihood=DistributionsLogPdf.log_normal,
     log_prior=x::AbstractArray -> compute_logpdf_prior(x; params_dict=params_dict),
-    n_iter=2000,
+    n_iter=1000,
     optimiser=optimiser,
     save_all=false,
     use_noisy_grads=false,
@@ -223,6 +226,7 @@ density(beta', label=false)
 
 # lambda
 rand(q[prior_position[:sigma_beta]])
+scatter(rand(q[prior_position[:sigma_beta]]))
 # tau
 rand(q[prior_position[:tau_beta]])
 

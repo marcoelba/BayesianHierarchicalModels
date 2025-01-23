@@ -42,6 +42,7 @@ function elbo(
     X::AbstractArray,
     ranges_z::AbstractArray,
     vi_family_array::AbstractArray,
+    random_weights::AbstractArray,
     model,
     log_likelihood,
     log_prior=zero,
@@ -56,7 +57,7 @@ function elbo(
 
     for mc = 1:n_samples
         # random sample from VI distribution
-        theta, abs_jacobian = VariationalDistributions.rand_with_logjacobian(q_dist_array)
+        theta, abs_jacobian = VariationalDistributions.rand_with_logjacobian(q_dist_array, random_weights=random_weights)
         # evaluate the log-joint
         pred = model(theta; X=X)
         loglik = sum(log_likelihood(y, pred...))
@@ -78,8 +79,7 @@ function hybrid_training_loop(;
     z::AbstractArray,
     y::AbstractArray,
     X::AbstractArray,
-    ranges_z::AbstractArray,
-    vi_family_array::AbstractArray,
+    params_dict::OrderedDict,
     model,
     log_likelihood,
     log_prior=zero,
@@ -90,6 +90,10 @@ function hybrid_training_loop(;
     elbo_samples::Int64=1,
     lr_schedule=nothing
     )
+
+    vi_family_array = params_dict["vi_family_array"]
+    ranges_z = params_dict["ranges_z"]
+    random_weights = params_dict["random_weights"]
 
     # store best setting
     best_z = copy(z)
@@ -118,6 +122,7 @@ function hybrid_training_loop(;
                 X=X,
                 ranges_z=ranges_z,
                 vi_family_array=vi_family_array,
+                random_weights=random_weights,
                 model=model,
                 log_likelihood=log_likelihood,
                 log_prior=log_prior,
