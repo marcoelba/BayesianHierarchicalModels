@@ -2,34 +2,39 @@
 using CSV
 using DataFrames
 
-using OrderedCollections
+using Optimisers
 using Distributions
+using DistributionsAD
+using LogExpFunctions
 using StatsPlots
 
 abs_project_path = normpath(joinpath(@__FILE__, "..", "..", ".."))
 
+include(joinpath(abs_project_path, "src", "model_building", "my_optimisers.jl"))
+
 include(joinpath(abs_project_path, "src", "model_building", "utils.jl"))
+include(joinpath(abs_project_path, "src", "model_building", "training_utils.jl"))
+
 include(joinpath(abs_project_path, "src", "model_building", "plot_utils.jl"))
-include(joinpath(abs_project_path, "src", "model_building", "posterior_utils.jl"))
-include(joinpath(abs_project_path, "src", "model_building", "model_prediction_functions.jl"))
-include(joinpath(abs_project_path, "src", "model_building", "distributions_logpdf.jl"))
-include(joinpath(abs_project_path, "src", "model_building", "vectorised_bijectors.jl"))
+
+include(joinpath(abs_project_path, "src", "model_building", "bijectors_extension.jl"))
 include(joinpath(abs_project_path, "src", "model_building", "variational_distributions.jl"))
-include(joinpath(abs_project_path, "src", "model_building", "mirror_statistic.jl"))
+
+include(joinpath(abs_project_path, "src", "model_building", "distributions_logpdf.jl"))
 include(joinpath(abs_project_path, "src", "utils", "mixed_models_data_generation.jl"))
+include(joinpath(abs_project_path, "src", "model_building", "mirror_statistic.jl"))
 
 
 n_individuals = 500
 
-p = 500
+p = 1000
 prop_non_zero = 0.05
 p1 = Int(p * prop_non_zero)
 p0 = p - p1
 corr_factor = 0.5
 
-n_chains = 2
-num_iter = 2000
-MC_SAMPLES = 2000
+num_iter = 1000
+MC_SAMPLES = 1000
 fdr_target = 0.1
 n_simulations = 10
 random_seed = 1234
@@ -38,82 +43,53 @@ simulations_metrics = Dict()
 
 label_files = "algo_logistic_n$(n_individuals)_p$(p)_active$(p1)_r$(Int(corr_factor*100))"
 
+# Define priors and Variational Distributions
 params_dict = OrderedDict()
 
 # beta 0
 update_parameters_dict(
     params_dict;
     name="beta0",
-    dimension=(1,),
-    log_prob_fun=x::Float32 -> DistributionsLogPdf.log_normal(x)
+    dim_theta=(1, ),
+    logpdf_prior=x::Real -> DistributionsLogPdf.log_normal(x),
+    dim_z=2,
+    vi_family=z::AbstractArray -> VariationalDistributions.vi_normal(z; bij=identity),
+    init_z=[0., 0.1]
 )
 
 # beta fixed
-
-# CP
 update_parameters_dict(
     params_dict;
-    name="hyper_sigma_beta",
-    dimension=(p, ),
-    bij=VectorizedBijectors.softplus,
-    log_prob_fun=x::AbstractArray{Float32} -> DistributionsLogPdf.log_half_cauchy(
-        x, sigma=Float32.(ones(p) .* 3)
-    )
+    name="tau_beta",
+    dim_theta=(1, ),
+    logpdf_prior=x::Real -> DistributionsLogPdf.log_half_cauchy(x, sigma=1.),
+    dim_z=2,
+    vi_family=z::AbstractArray -> VariationalDistributions.vi_normal(z; bij=LogExpFunctions.log1pexp),
+    init_z=vcat(0.1, 0.1)
 )
 
 update_parameters_dict(
     params_dict;
     name="sigma_beta",
-    dimension=(p, ),
-    bij=VectorizedBijectors.softplus,
-    log_prob_fun=(x::AbstractArray{Float32}, sigma::AbstractArray{Float32}) -> DistributionsLogPdf.log_half_cauchy(
-        x, sigma=Float32.(ones(p) .* sigma)
-    ),
-    dependency=["hyper_sigma_beta"]
+    dim_theta=(p, ),
+    logpdf_prior=x::AbstractArray -> DistributionsLogPdf.log_beta(x, 1., 1.),
+    dim_z=p*2,
+    vi_family=z::AbstractArray -> VariationalDistributions.vi_mv_normal(z; bij=LogExpFunctions.logistic),
+    init_z=vcat(randn(p)*0.1, randn(p)*0.1),
+    dependency=[]
 )
-
 update_parameters_dict(
     params_dict;
     name="beta",
-    dimension=(p,),
-    log_prob_fun=(x::AbstractArray{Float32}, sigma::AbstractArray{Float32}) -> DistributionsLogPdf.log_normal(
-        x, sigma=sigma
-    ),
-    dependency=["sigma_beta"]
+    dim_theta=(p, ),
+    logpdf_prior=(x::AbstractArray, sigma::AbstractArray, tau::Real) -> DistributionsLogPdf.log_normal(x, sigma=sigma .* tau),
+    dim_z=p*2,
+    vi_family=z::AbstractArray -> VariationalDistributions.vi_mv_normal(z; bij=identity),
+    init_z=vcat(randn(p)*0.01, randn(p)*0.01),
+    dependency=["sigma_beta", "tau_beta"]
 )
 
-# NCP
-update_parameters_dict(
-    params_dict;
-    name="hyper_sigma_beta",
-    dimension=(1, ),
-    bij=VectorizedBijectors.softplus,
-    log_prob_fun=x::Float32 -> DistributionsLogPdf.log_half_cauchy(
-        x, sigma=Float32.(1)
-    )
-)
-
-update_parameters_dict(
-    params_dict;
-    name="sigma_beta",
-    dimension=(p, ),
-    bij=VectorizedBijectors.softplus,
-    log_prob_fun=x::AbstractArray{Float32} -> DistributionsLogPdf.log_half_cauchy(
-        x, sigma=Float32.(ones(p) .* 1)
-    )
-)
-
-update_parameters_dict(
-    params_dict;
-    name="beta",
-    dimension=(p,),
-    log_prob_fun=(x::AbstractArray{Float32}, sigma::AbstractArray{Float32}, tau::Float32) -> DistributionsLogPdf.log_normal(
-        x, sigma=sigma .* tau
-    ),
-    dependency=["sigma_beta", "hyper_sigma_beta"]
-)
-
-theta_axes, _ = get_parameters_axes(params_dict)
+prior_position = params_dict["tuple_prior_position"]
 
 
 for simu = 1:n_simulations
@@ -127,52 +103,50 @@ for simu = 1:n_simulations
     )
     
     # model predictions
-    model(theta_components) = Predictors.linear_predictor(
-        theta_components;
-        X=data_dict["X"],
-        link=StatsFuns.logistic
-    )
+    function model(theta::AbstractArray; X::AbstractArray, prior_position=prior_position)
+        beta_reg = theta[prior_position[:beta]] .* theta[prior_position[:sigma_beta]]
+        mu = X * beta_reg .+ theta[prior_position[:beta0]]
+        return (mu, )
+    end
     
-    # model
-    partial_log_joint(theta) = log_joint(
-        theta;
-        params_dict=params_dict,
-        theta_axes=theta_axes,
-        model=model,
-        log_likelihood=DistributionsLogPdf.log_bernoulli,
-        label=data_dict["y"]
-    )
-
-    # VI distribution
-    vi_dist(z::AbstractArray) = VariationalDistributions.meanfield(z, tot_params=params_dict["tot_params"])
+    # function model(theta::AbstractArray; X::AbstractArray, prior_position=params_dict["tuple_prior_position"])
+    #     mu = X * theta[prior_position[:beta]] .+ theta[prior_position[:beta0]]
+    #     return (mu, )
+    # end
 
     # Training
-    res = training_loop(;
-        log_joint=partial_log_joint,
-        vi_dist=vi_dist,
-        z_dim=params_dict["tot_params"]*2,
+    z = VariationalDistributions.get_init_z(params_dict, dtype=Float64)
+    optimiser = MyOptimisers.DecayedADAGrad()
+    # optimiser = Optimisers.RMSProp(0.01)
+    
+    res = hybrid_training_loop(
+        z=z,
+        y=data_dict["y"],
+        X=data_dict["X"],
+        params_dict=params_dict,
+        model=model,
+        log_likelihood=DistributionsLogPdf.log_bernoulli_from_logit,
+        log_prior=x::AbstractArray -> compute_logpdf_prior(x; params_dict=params_dict),
         n_iter=num_iter,
-        n_chains=n_chains,
-        samples_per_step=2,
-        sd_init=0.5f0,
-        use_noisy_grads=true,
-        n_cycles=2
-    )
-
-    vi_posterior = average_posterior(
-        res["posteriors"],
-        Distributions.MultivariateNormal
+        optimiser=optimiser,
+        save_all=false,
+        use_noisy_grads=false,
+        elbo_samples=3
     )
     
-    simulations_models[simu] = (vi_posterior, res["elbo_trace"], params_dict)
+    z = res["best_iter_dict"]["best_z"]
+
+    q = VariationalDistributions.get_variational_dist(
+        z,
+        params_dict["vi_family_array"],
+        params_dict["ranges_z"]
+    )
+    
+    simulations_models[simu] = (q, res["loss_dict"]["loss"], params_dict)
 
     # ------ Mirror Statistic ------
 
-    ms_dist = MirrorStatistic.posterior_ms_coefficients(
-        vi_posterior=vi_posterior,
-        prior="beta",
-        params_dict=params_dict
-    )
+    ms_dist = MirrorStatistic.posterior_ms_coefficients(q[prior_position[:beta]].dist)
 
     metrics = MirrorStatistic.optimal_inclusion(
         ms_dist_vec=ms_dist,

@@ -19,7 +19,8 @@ function update_parameters_dict(
     vi_family,
     init_z=randn(dim_z),
     dependency=[],
-    random_variable::Bool=true
+    random_variable::Bool=true,
+    noisy_gradient::Int64=0
     )
 
     if !("priors" in keys(params_dict))
@@ -44,6 +45,7 @@ function update_parameters_dict(
 
         params_dict["keys_prior_position"] = OrderedDict()
         params_dict["random_weights"] = []
+        params_dict["noisy_gradients"] = []
     end
 
     if !(parameter_already_included)
@@ -56,7 +58,6 @@ function update_parameters_dict(
         # range VI weights (z)
         range_z = (params_dict["tot_vi_weights"] + 1):(params_dict["tot_vi_weights"] + dim_z)
         params_dict["tot_vi_weights"] = params_dict["tot_vi_weights"] + dim_z
-
     else
         range_theta = params_dict["priors"][name]["range_theta"]
         params_dict["tot_params"] = params_dict["tot_params"]
@@ -86,6 +87,7 @@ function update_parameters_dict(
         push!(params_dict["ranges_z"], params_dict["priors"][name]["range_z"])
         push!(params_dict["vi_family_array"], params_dict["priors"][name]["vi_family"])
         push!(params_dict["random_weights"], params_dict["priors"][name]["random_variable"])
+        append!(params_dict["noisy_gradients"], ones(dim_z) .* noisy_gradient)
 
         params_dict["keys_prior_position"][Symbol(name)] = length(params_dict["vi_family_array"])
         params_dict["tuple_prior_position"] = (; params_dict["keys_prior_position"]...)

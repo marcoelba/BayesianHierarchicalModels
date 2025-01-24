@@ -82,6 +82,18 @@ function vi_mv_normal(z::AbstractArray; bij=identity)
     )
 end
 
+function vi_mv_normal_known_var(z::AbstractArray; bij=identity)
+    zdim = length(z)
+
+    Bijectors.transformed(
+        DistributionsAD.MvNormal(
+            z,
+            ones(eltype(z), zdim)
+        ),
+        bij
+    )
+end
+
 
 function vi_constant_mv_normal(z::AbstractArray; bij=identity)
     Bijectors.transformed(

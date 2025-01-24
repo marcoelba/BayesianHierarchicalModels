@@ -2,6 +2,7 @@
 
 module DistributionsLogPdf
 using LogExpFunctions: log1pexp
+using SpecialFunctions: logbeta
 
 
 function log_normal(
@@ -34,6 +35,14 @@ function log_normal(
 end
 
 
+function log_half_normal(
+    x::Real,
+    sigma::Real=1f0
+    )
+    0.5f0 * log(2) - 0.5f0 * log(Float32(pi)) - log(sigma) - 0.5f0 * (x / sigma)^2f0
+end
+
+
 function log_half_cauchy(
     x::AbstractArray,
     sigma::AbstractArray=(eltype(x), ones(size(x)))
@@ -57,6 +66,12 @@ function log_half_cauchy(
     )
     log(2f0) .- log.(Float32(pi) .* sigma) .- log.(1f0 .+ (x ./ sigma).^2f0)
 end
+
+
+function log_beta(x::AbstractArray, a::Real, b::Real)
+    (a - 1) .* log.(x) .+ (b - 1) .* log.(1 .- x) .- logbeta(a, b)
+end
+
 
 function log_bernoulli_from_logit(x::AbstractArray, logitp::AbstractArray)
     @. - (1 - x) * log1pexp(logitp) - x * log1pexp(-logitp)

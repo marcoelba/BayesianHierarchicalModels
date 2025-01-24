@@ -94,6 +94,7 @@ function hybrid_training_loop(;
     vi_family_array = params_dict["vi_family_array"]
     ranges_z = params_dict["ranges_z"]
     random_weights = params_dict["random_weights"]
+    noisy_gradients = params_dict["noisy_gradients"]
 
     # store best setting
     best_z = copy(z)
@@ -135,7 +136,8 @@ function hybrid_training_loop(;
         
         # Using noisy gradients?
         if use_noisy_grads
-            @. z += randn(eltype(z), length(z)) .* lr_schedule[iter]
+            rand_z = randn(eltype(z), length(z)) .* noisy_gradients .* lr_schedule[iter]
+            z .+= rand_z
         end
 
         # store
