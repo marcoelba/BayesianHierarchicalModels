@@ -2,24 +2,31 @@
 using CSV
 using DataFrames
 
-using OrderedCollections
+using Optimisers
 using Distributions
+using DistributionsAD
+using LogExpFunctions
 using StatsPlots
 
 abs_project_path = normpath(joinpath(@__FILE__, "..", "..", ".."))
 
+include(joinpath(abs_project_path, "src", "model_building", "my_optimisers.jl"))
+
 include(joinpath(abs_project_path, "src", "model_building", "utils.jl"))
+include(joinpath(abs_project_path, "src", "model_building", "training_utils.jl"))
+
 include(joinpath(abs_project_path, "src", "model_building", "plot_utils.jl"))
-include(joinpath(abs_project_path, "src", "model_building", "posterior_utils.jl"))
-include(joinpath(abs_project_path, "src", "model_building", "model_prediction_functions.jl"))
-include(joinpath(abs_project_path, "src", "model_building", "distributions_logpdf.jl"))
-include(joinpath(abs_project_path, "src", "model_building", "vectorised_bijectors.jl"))
+
+include(joinpath(abs_project_path, "src", "model_building", "bijectors_extension.jl"))
 include(joinpath(abs_project_path, "src", "model_building", "variational_distributions.jl"))
-include(joinpath(abs_project_path, "src", "model_building", "mirror_statistic.jl"))
+
+include(joinpath(abs_project_path, "src", "model_building", "distributions_logpdf.jl"))
 include(joinpath(abs_project_path, "src", "utils", "mixed_models_data_generation.jl"))
+include(joinpath(abs_project_path, "src", "model_building", "mirror_statistic.jl"))
 
 
-n_individuals = 200
+
+n_individuals = 300
 
 p = 1000
 prop_non_zero = 0.05
@@ -27,16 +34,16 @@ p1 = Int(p * prop_non_zero)
 p0 = p - p1
 corr_factor = 0.5
 
-n_chains = 2
-num_iter = 2000
-MC_SAMPLES=2000
+num_iter = 1000
+MC_SAMPLES = 1000
 fdr_target = 0.1
 n_simulations = 10
 random_seed = 1234
 simulations_models = Dict()
 simulations_metrics = Dict()
 
-label_files = "algo_HS_linear_n$(n_individuals)_p$(p)_active$(p1)_r$(Int(corr_factor*100))"
+# label_files = "algo_HS_linear_n$(n_individuals)_p$(p)_active$(p1)_r$(Int(corr_factor*100))"
+label_files = "algo_product_linear_n$(n_individuals)_p$(p)_active$(p1)_r$(Int(corr_factor*100))"
 
 params_dict = OrderedDict()
 
@@ -44,39 +51,61 @@ params_dict = OrderedDict()
 update_parameters_dict(
     params_dict;
     name="beta0",
-    dimension=(1, ),
-    log_prob_fun=x::Float32 -> DistributionsLogPdf.log_normal(x)
+    dim_theta=(1, ),
+    logpdf_prior=x::Real -> DistributionsLogPdf.log_normal(x),
+    dim_z=2,
+    vi_family=z::AbstractArray -> VariationalDistributions.vi_normal(z; bij=identity),
+    init_z=[0., 0.1]
 )
 
 # beta fixed
 update_parameters_dict(
     params_dict;
+    name="tau_beta",
+    dim_theta=(1, ),
+    logpdf_prior=x::Real -> DistributionsLogPdf.log_half_cauchy(x, sigma=1.),
+    dim_z=2,
+    vi_family=z::AbstractArray -> VariationalDistributions.vi_normal(z; bij=LogExpFunctions.log1pexp),
+    init_z=vcat(0.1, 0.1)
+)
+
+update_parameters_dict(
+    params_dict;
     name="sigma_beta",
-    dimension=(p, ),
-    bij=VectorizedBijectors.softplus,
-    log_prob_fun=x::AbstractArray{Float32} -> DistributionsLogPdf.log_half_cauchy(x, sigma=Float32.(ones(p)*1))
+    dim_theta=(p, ),
+    logpdf_prior=x::AbstractArray -> DistributionsLogPdf.log_beta(x, 0.5, 0.5),
+    dim_z=p*2,
+    vi_family=z::AbstractArray -> VariationalDistributions.vi_mv_normal(z; bij=LogExpFunctions.logistic),
+    init_z=vcat(randn(p)*0.1, randn(p)*0.1),
+    dependency=[]
 )
 update_parameters_dict(
     params_dict;
     name="beta",
-    dimension=(p, ),
-    log_prob_fun=(x::AbstractArray{Float32}, sigma::AbstractArray{Float32}) -> DistributionsLogPdf.log_normal(x, sigma=sigma),
-    dependency=["sigma_beta"]
+    dim_theta=(p, ),
+    logpdf_prior=(x::AbstractArray, sigma::AbstractArray, tau::Real) -> DistributionsLogPdf.log_normal(x, sigma=sigma .* tau),
+    dim_z=p*2,
+    vi_family=z::AbstractArray -> VariationalDistributions.vi_mv_normal(z; bij=identity),
+    init_z=vcat(randn(p)*0.01, randn(p)*0.01),
+    dependency=["sigma_beta", "tau_beta"]
 )
 
 # sigma y
 update_parameters_dict(
     params_dict;
     name="sigma_y",
-    dimension=(1, ),
-    bij=VectorizedBijectors.softplus,
-    log_prob_fun=x::Float32 -> Distributions.logpdf(
-        truncated(Normal(0f0, 0.2f0), 0f0, Inf32),
+    dim_theta=(1, ),
+    logpdf_prior=x::Real -> Distributions.logpdf(
+        truncated(Normal(0f0, 0.5f0), 0f0, Inf32),
         x
-    )
+    ),
+    dim_z=2,
+    vi_family=z::AbstractArray -> VariationalDistributions.vi_normal(z; bij=LogExpFunctions.log1pexp),
+    init_z=vcat(1., 0.5)
 )
 
-theta_axes, _ = get_parameters_axes(params_dict)
+prior_position = params_dict["tuple_prior_position"]
+
 
 for simu = 1:n_simulations
 
@@ -88,49 +117,49 @@ for simu = 1:n_simulations
         random_seed=random_seed + simu
     )
     
-    # model predictions
-    model(theta_components) = Predictors.linear_model(
-        theta_components;
-        X=data_dict["X"]
-    )
-
-    # model log joint
-    partial_log_joint(theta) = log_joint(
-        theta;
+    function model(theta::AbstractArray; X::AbstractArray, prior_position=prior_position)
+        beta_reg = theta[prior_position[:beta]] .* theta[prior_position[:sigma_beta]]
+        mu = X * beta_reg .+ theta[prior_position[:beta0]]
+        return (mu, ones(eltype(mu), size(mu)) .* theta[prior_position[:sigma_y]])
+    end
+    
+    # Training
+    z = VariationalDistributions.get_init_z(params_dict, dtype=Float64)
+    optimiser = MyOptimisers.DecayedADAGrad()
+    # optimiser = Optimisers.RMSProp(0.01)
+    
+    res = hybrid_training_loop(
+        z=z,
+        y=data_dict["y"],
+        X=data_dict["X"],
         params_dict=params_dict,
-        theta_axes=theta_axes,
         model=model,
         log_likelihood=DistributionsLogPdf.log_normal,
-        label=data_dict["y"]
-    )
-
-    # VI distribution
-    vi_dist(z::AbstractArray) = VariationalDistributions.meanfield(z, tot_params=params_dict["tot_params"])
-
-    # Training
-    res = training_loop(;
-        log_joint=partial_log_joint,
-        vi_dist=vi_dist,
-        z_dim=params_dict["tot_params"]*2,
+        log_prior=x::AbstractArray -> compute_logpdf_prior(x; params_dict=params_dict),
         n_iter=num_iter,
-        n_chains=n_chains,
-        samples_per_step=2
-    )
-
-    vi_posterior = average_posterior(
-        res["posteriors"],
-        Distributions.MultivariateNormal
+        optimiser=optimiser,
+        save_all=false,
+        use_noisy_grads=false,
+        elbo_samples=3
     )
     
-    simulations_models[simu] = (vi_posterior, res["elbo_trace"], params_dict)
+    z = res["best_iter_dict"]["best_z"]
+
+    q = VariationalDistributions.get_variational_dist(
+        z,
+        params_dict["vi_family_array"],
+        params_dict["ranges_z"]
+    )
+    
+    plot(res["loss_dict"]["loss"])
+    beta = rand(q[prior_position[:beta]], 500)
+    density(beta', label=false)
+
+    simulations_models[simu] = (q, res["loss_dict"]["loss"], params_dict)
 
     # ------ Mirror Statistic ------
 
-    ms_dist = MirrorStatistic.posterior_ms_coefficients(
-        vi_posterior=vi_posterior,
-        prior="beta",
-        params_dict=params_dict
-    )
+    ms_dist = MirrorStatistic.posterior_ms_coefficients(q[prior_position[:beta]].dist)
 
     metrics = MirrorStatistic.optimal_inclusion(
         ms_dist_vec=ms_dist,
@@ -148,53 +177,58 @@ for simu = 1:n_simulations
         data_dict["beta"] .!= 0.,
         selection
     )
-
-    metrics_dict["fdr_range"] = metrics.fdr_range
-    metrics_dict["tpr_range"] = metrics.tpr_range
     
-    metrics_dict["metrics_mean"] = metrics.metrics_mean
-    metrics_dict["metrics_median"] = metrics.metrics_median
     metrics_dict["metrics_posterior"] = metrics_posterior
+
+    # Monte Carlo loop
+    mc_samples = 2000
+    ms_samples = Int(mc_samples / 2)
+    mean_sigma = mean(rand(q[prior_position[:sigma_beta]], mc_samples), dims=2)[:, 1]
+    beta = rand(q[prior_position[:beta]], mc_samples) .* mean_sigma
+
+    ms_coeffs = MirrorStatistic.mirror_statistic(beta[:, 1:ms_samples], beta[:, ms_samples+1:mc_samples])
+    opt_t = MirrorStatistic.get_t(ms_coeffs; fdr_target=0.1)
+    inclusion_matrix = ms_coeffs .> opt_t
+    mean_inclusion_per_coef = mean(inclusion_matrix, dims=2)[:, 1]
+
+    c_opt, selection = MirrorStatistic.posterior_fdr_threshold(
+        mean_inclusion_per_coef,
+        fdr_target
+    )
+
+    metrics_mc = MirrorStatistic.wrapper_metrics(
+        data_dict["beta"] .!= 0.,
+        selection
+    )
+    metrics_dict["metrics_mc"] = metrics_mc
+
 
     simulations_metrics[simu] = metrics_dict
 
 end
 
 
-mean_fdr = []
-mean_tpr = []
+mc_fdr = []
+mc_tpr = []
 posterior_fdr = []
 posterior_tpr = []
 
 for simu = 1:n_simulations
-    push!(mean_fdr, simulations_metrics[simu]["metrics_mean"].fdr)
-    push!(mean_tpr, simulations_metrics[simu]["metrics_mean"].tpr)
+    push!(mc_fdr, simulations_metrics[simu]["metrics_mc"].fdr)
+    push!(mc_tpr, simulations_metrics[simu]["metrics_mc"].tpr)
 
     push!(posterior_fdr, simulations_metrics[simu]["metrics_posterior"].fdr)
     push!(posterior_tpr, simulations_metrics[simu]["metrics_posterior"].tpr)
-
 end
 
-all_metrics = hcat(mean_fdr, posterior_fdr, mean_tpr, posterior_tpr)
-df = DataFrame(all_metrics, ["mean_fdr", "posterior_fdr", "mean_tpr", "posterior_tpr"])
+all_metrics = hcat(mc_fdr, posterior_fdr, mc_tpr, posterior_tpr)
+df = DataFrame(all_metrics, ["mc_fdr", "posterior_fdr", "mc_tpr", "posterior_tpr"])
 
 CSV.write(
     joinpath(abs_project_path, "results", "simulations", "$(label_files).csv"),
     df
 )
 
-
-plt_tpr = boxplot(mean_tpr, label=false)
-boxplot!(posterior_tpr, label=false)
-xticks!([1, 2], ["Mean", "Posterior"], tickfontsize=10)
-title!("TPR", titlefontsize=20)
-
-plt_fdr = boxplot(mean_fdr, label=false)
-boxplot!(posterior_fdr, label=false)
-xticks!([1, 2], ["Mean", "Posterior"], tickfontsize=10)
-title!("FDR", titlefontsize=20)
-
-plt = plot(plt_fdr, plt_tpr)
 
 plt = violin([1], posterior_fdr, color="lightblue", label=false, alpha=1, linewidth=0)
 boxplot!([1], posterior_fdr, label=false, color="blue", fillalpha=0.1, linewidth=2)
@@ -207,6 +241,17 @@ yticks!(range(0, 1, step=0.1), tickfontsize=15)
 
 savefig(plt, joinpath(abs_project_path, "results", "simulations", "$(label_files)_fdrtpr_boxplot.pdf"))
 
+# MC
+plt = violin([1], mc_fdr, color="lightblue", label=false, alpha=1, linewidth=0)
+boxplot!([1], mc_fdr, label=false, color="blue", fillalpha=0.1, linewidth=2)
+
+violin!([2], mc_tpr, color="lightblue", label=false, alpha=1, linewidth=0)
+boxplot!([2], mc_tpr, label=false, color="blue", fillalpha=0.1, linewidth=2)
+
+xticks!([1, 2], ["FDR", "TPR"], tickfontsize=15)
+yticks!(range(0, 1, step=0.1), tickfontsize=15)
+
+savefig(plt, joinpath(abs_project_path, "results", "simulations", "$(label_files)_fdrtpr_boxplot.pdf"))
 
 # ----------- Data Splitting -----------
 include(joinpath(abs_project_path, "src", "utils", "variable_selection_plus_inference.jl"))
@@ -268,102 +313,87 @@ savefig(plt, joinpath(abs_project_path, "results", "simulations", "$(label_files
 data_dict = generate_linear_model_data(
     n_individuals=n_individuals,
     p=p, p1=p1, p0=p0, corr_factor=corr_factor,
-    random_seed=random_seed+1
+    random_seed=random_seed
 )
 
-# model predictions
-model(theta_components) = Predictors.linear_model(
-    theta_components;
-    X=data_dict["X"]
-)
-
-# model log joint
-partial_log_joint(theta) = log_joint(
-    theta;
-    params_dict=params_dict,
-    theta_axes=theta_axes,
-    model=model,
-    log_likelihood=DistributionsLogPdf.log_normal,
-    label=data_dict["y"]
-)
-
-# VI distribution
-vi_dist(z::AbstractArray) = VariationalDistributions.meanfield(z, tot_params=params_dict["tot_params"])
+function model(theta::AbstractArray; X::AbstractArray, prior_position=prior_position)
+    beta_reg = theta[prior_position[:beta]] .* theta[prior_position[:sigma_beta]]
+    mu = X * beta_reg .+ theta[prior_position[:beta0]]
+    return (mu, ones(eltype(mu), size(mu)) .* theta[prior_position[:sigma_y]])
+end
 
 # Training
-res = training_loop(;
-    log_joint=partial_log_joint,
-    vi_dist=vi_dist,
-    z_dim=params_dict["tot_params"]*2,
-    n_iter=4000,
-    n_chains=2,
-    samples_per_step=2,
+z = VariationalDistributions.get_init_z(params_dict, dtype=Float64)
+optimiser = MyOptimisers.DecayedADAGrad()
+# optimiser = Optimisers.RMSProp(0.01)
+
+res = hybrid_training_loop(
+    z=z,
+    y=data_dict["y"],
+    X=data_dict["X"],
+    params_dict=params_dict,
+    model=model,
+    log_likelihood=DistributionsLogPdf.log_normal,
+    log_prior=x::AbstractArray -> compute_logpdf_prior(x; params_dict=params_dict),
+    n_iter=num_iter,
+    optimiser=optimiser,
+    save_all=false,
     use_noisy_grads=false,
-    n_cycles=1
+    elbo_samples=3
 )
 
-plot(res["elbo_trace"][num_iter:end, 1])
+z = res["best_iter_dict"]["best_z"]
 
-vi_posterior = average_posterior(
-    res["posteriors"],
-    Distributions.MultivariateNormal
+q = VariationalDistributions.get_variational_dist(
+    z,
+    params_dict["vi_family_array"],
+    params_dict["ranges_z"]
 )
-samples_posterior = posterior_samples(
-    vi_posterior=vi_posterior,
-    params_dict=params_dict,
-    n_samples=MC_SAMPLES
-)
-beta_samples = extract_parameter(
-    prior="beta",
-    params_dict=params_dict,
-    samples_posterior=samples_posterior
-)
-plt = density(beta_samples', label=false)
+
+plot(res["loss_dict"]["loss"])
+beta_samples = rand(q[prior_position[:beta]], 500)
+sigma_beta_samples = rand(q[prior_position[:sigma_beta]], 500)
+
+density(beta_samples', label=false)
+density(beta_samples' .* sigma_beta_samples', label=false)
+density(beta_samples' .* mean(sigma_beta_samples, dims=2)[:, 1]', label=false)
+
+
+plt = density(beta_samples' .* sigma_beta_samples', label=false)
 ylabel!("Density")
 savefig(plt, joinpath(abs_project_path, "results", "simulations", "$(label_files)_posterior_beta.pdf"))
 
 # ------ Mirror Statistic ------
 
-ms_dist = MirrorStatistic.posterior_ms_coefficients(
-    vi_posterior=vi_posterior,
-    prior="beta",
-    params_dict=params_dict
-)
+# Monte Carlo loop
+mc_samples = 2000
+ms_samples = Int(mc_samples / 2)
 
-metrics = MirrorStatistic.optimal_inclusion(
-    ms_dist_vec=ms_dist,
-    mc_samples=MC_SAMPLES,
-    beta_true=data_dict["beta"],
-    fdr_target=fdr_target
-)
+mean_sigma = mean(rand(q[prior_position[:sigma_beta]], mc_samples), dims=2)[:, 1]
+beta = rand(q[prior_position[:beta]], mc_samples) .* mean_sigma
 
-# distribution
-boxplot(metrics.fdr_distribution, label="FDR")
-boxplot!(metrics.tpr_distribution, label="TPR")
-
-plt = fdr_n_hist(metrics)
-savefig(plt, joinpath(abs_project_path, "results", "simulations", "$(label_files)_fdr_n_hist.pdf"))
-
-
-plt_n = histogram(metrics.n_inclusion_per_mc, bins=10, label=false, normalize=true)
-xlabel!("# variables included", labelfontsize=15)
-vline!([mean(metrics.n_inclusion_per_mc)], color = :red, linewidth=5, label="average")
-display(plt_n)
-savefig(plt_n, joinpath(abs_project_path, "results", "ms_analysis", "$(label_files)_n_vars_included.pdf"))
-
-n_inclusion_per_coef = sum(metrics.inclusion_matrix, dims=2)[:,1]
-mean_inclusion_per_coef = mean(metrics.inclusion_matrix, dims=2)[:,1]
+ms_coeffs = MirrorStatistic.mirror_statistic(beta[:, 1:ms_samples], beta[:, ms_samples+1:mc_samples])
+opt_t = MirrorStatistic.get_t(ms_coeffs; fdr_target=0.1)
+inclusion_matrix = ms_coeffs .> opt_t
+n_inclusion_per_mc = sum(inclusion_matrix, dims=1)[1, :]
+mean_inclusion_per_coef = mean(inclusion_matrix, dims=2)[:, 1]
 
 c_opt, selection = MirrorStatistic.posterior_fdr_threshold(
     mean_inclusion_per_coef,
     fdr_target
 )
-sum((1 .- mean_inclusion_per_coef) .<= c_opt)
 
 metrics = MirrorStatistic.wrapper_metrics(
     data_dict["beta"] .!= 0.,
     selection
 )
+
+
+plt_n = histogram(n_inclusion_per_mc, bins=10, label=false, normalize=true)
+xlabel!("# variables included", labelfontsize=15)
+vline!([mean(n_inclusion_per_mc)], color = :red, linewidth=5, label="average")
+display(plt_n)
+savefig(plt_n, joinpath(abs_project_path, "results", "ms_analysis", "$(label_files)_n_vars_included.pdf"))
 
 plt_probs = scatter(
     findall((1 .- mean_inclusion_per_coef) .> c_opt),
@@ -383,132 +413,6 @@ savefig(plt_probs, joinpath(abs_project_path, "results", "ms_analysis", "$(label
 
 plt = plot(plt_n, plt_probs)
 savefig(plt, joinpath(abs_project_path, "results", "simulations", "$(label_files)_n_and_probs.pdf"))
-
-
-# range
-boxplot(metrics.fdr_range, label="FDR")
-boxplot!(metrics.tpr_range, label="TPR")
-
-metrics.metrics_mean
-metrics.metrics_median
-plt = scatter_sel_matrix(metrics.inclusion_matrix, p0=p0)
-
-savefig(plt, joinpath(abs_project_path, "results", "simulations", "$(label_files)_inclusion_probs.pdf"))
-
-metrics.metrics_relative
-
-range_p = collect(range(1, p))
-scatter(metrics.relative_inclusion_freq, markersize=3, label="Sorted relative inclusion freq")
-hline!([metrics.min_inclusion_freq], label="Cutoff inclusion", linewidth=2)
-sum(metrics.relative_inclusion_freq .> metrics.min_inclusion_freq)
-
-excluded = metrics.relative_inclusion_freq .<= metrics.min_inclusion_freq
-included = metrics.relative_inclusion_freq .> metrics.min_inclusion_freq
-range_p = collect(range(1, p))
-
-plt = scatter(range_p[excluded], metrics.relative_inclusion_freq[excluded], label="Out")
-scatter!(range_p[included], metrics.relative_inclusion_freq[included], label="In")
-vspan!(plt, [p0 + 1, p], color = :green, alpha = 0.2, labels = "true active coefficients")
-
-# Posterior
-inclusion_probs = mean(metrics.inclusion_matrix, dims=2)[:, 1]
-c_opt, selection = MirrorStatistic.posterior_fdr_threshold(inclusion_probs, fdr_target)
-sum(selection)
-
-metrics = MirrorStatistic.wrapper_metrics(
-    data_dict["beta"] .!= 0.,
-    selection
-)
-
-MirrorStatistic.posterior_ms_inclusion(
-    ms_dist_vec=ms_dist,
-    mc_samples=MC_SAMPLES,
-    beta_true=data_dict["beta"],
-    fdr_target=0.1
-)
-
-
-metrics = MirrorStatistic.fdr_distribution(
-    ms_dist_vec=ms_dist,
-    mc_samples=MC_SAMPLES,
-    beta_true=data_dict["beta"],
-    fdr_target=fdr_target
-)
-
-metrics.metrics_relative
-
-excluded = metrics.relative_inclusion_freq .<= metrics.min_inclusion_freq
-included = metrics.relative_inclusion_freq .> metrics.min_inclusion_freq
-range_p = collect(range(1, p))
-
-plt = scatter(range_p[excluded], metrics.relative_inclusion_freq[excluded], label="Out")
-scatter!(range_p[included], metrics.relative_inclusion_freq[included], label="In")
-vspan!(plt, [p0 + 1, p], color = :green, alpha = 0.2, labels = "true active coefficients")
-
-# Using lambda as inclusion probabilities
-sigma_samples = extract_parameter(
-    prior="sigma_y",
-    params_dict=params_dict,
-    samples_posterior=samples_posterior
-)
-mean(sigma_samples)
-
-lambda_samples = extract_parameter(
-    prior="sigma_beta",
-    params_dict=params_dict,
-    samples_posterior=samples_posterior
-)
-plt = density(lambda_samples', label=false)
-mean_lambda = mean(lambda_samples, dims=2)[:, 1]
-scatter(mean_lambda)
-scatter(1 .- 1 ./ (1 .+ mean_lambda.^2 .* mean(sigma_samples)) )
-probs_inc = 1 .- 1 ./ (1 .+ mean_lambda.^2)
-
-function fdp_estimate(ms_samples, probs, t)
-    
-    Dp = ms_samples .> t
-    
-    # d(t)(w > t) * (1 - r)
-    fp_est = sum(Dp .* (1 .- probs))
-    tot_d = sum(Dp)
-    fdp = fp_est / tot_d
-    
-    return fdp
-end
-
-function mc_fdp_estimate(ms_samples, probs, t)
-    fdr_MC_t = []
-    for m in eachcol(ms_samples)
-        push!(fdr_MC_t, fdp_estimate(m, probs, t))
-    end
-    return fdr_MC_t
-end
-
-ms_samples = rand(ms_dist, MC_SAMPLES)
-
-sum(ms_samples .> 0.5, dims=2) / MC_SAMPLES
-
-fdp_estimate(ms_samples[:, 1], probs_inc, 0.8)
-mc_fdp_estimate(ms_samples, probs_inc, 0.3)
-
-ms_samples = rand(ms_dist, 1)
-scatter(ms_samples)
-fdr = []
-t_range = range(minimum(abs.(ms_samples)), maximum(abs.(ms_samples)), length=100)
-t_range = sort(abs.(ms_samples[:, 1]))
-for t in t_range
-    push!(fdr, mean(mc_fdp_estimate(ms_samples, probs_inc, t)))
-end
-scatter(t_range, fdr)
-
-opt_t = 0
-for t in t_range
-    if mean(mc_fdp_estimate(ms_samples, probs_inc, t)) < 0.1
-        opt_t = t
-        break
-    end
-end
-mean(mc_fdp_estimate(ms_samples, probs_inc, opt_t))
 
 
 # -------------------------------------------------------

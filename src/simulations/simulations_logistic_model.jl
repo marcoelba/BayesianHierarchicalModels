@@ -36,8 +36,8 @@ corr_factor = 0.5
 num_iter = 1000
 MC_SAMPLES = 1000
 fdr_target = 0.1
-n_simulations = 10
-random_seed = 1234
+n_simulations = 30
+random_seed = 1256
 simulations_models = Dict()
 simulations_metrics = Dict()
 
@@ -72,7 +72,7 @@ update_parameters_dict(
     params_dict;
     name="sigma_beta",
     dim_theta=(p, ),
-    logpdf_prior=x::AbstractArray -> DistributionsLogPdf.log_beta(x, 1., 1.),
+    logpdf_prior=x::AbstractArray -> DistributionsLogPdf.log_beta(x, 0.5, 0.5),
     dim_z=p*2,
     vi_family=z::AbstractArray -> VariationalDistributions.vi_mv_normal(z; bij=LogExpFunctions.logistic),
     init_z=vcat(randn(p)*0.1, randn(p)*0.1),
@@ -109,11 +109,6 @@ for simu = 1:n_simulations
         return (mu, )
     end
     
-    # function model(theta::AbstractArray; X::AbstractArray, prior_position=params_dict["tuple_prior_position"])
-    #     mu = X * theta[prior_position[:beta]] .+ theta[prior_position[:beta0]]
-    #     return (mu, )
-    # end
-
     # Training
     z = VariationalDistributions.get_init_z(params_dict, dtype=Float64)
     optimiser = MyOptimisers.DecayedADAGrad()
@@ -167,20 +162,51 @@ for simu = 1:n_simulations
 
     metrics_dict["metrics_posterior"] = metrics_posterior
 
+    # Monte Carlo loop
+    mc_samples = 2000
+    ms_samples = Int(mc_samples / 2)
+    mean_sigma = mean(rand(q[prior_position[:sigma_beta]], mc_samples), dims=2)[:, 1]
+    beta = rand(q[prior_position[:beta]], mc_samples) .* mean_sigma
+
+    ms_coeffs = MirrorStatistic.mirror_statistic(beta[:, 1:ms_samples], beta[:, ms_samples+1:mc_samples])
+    opt_t = MirrorStatistic.get_t(ms_coeffs; fdr_target=0.1)
+    inclusion_matrix = ms_coeffs .> opt_t
+    mean_inclusion_per_coef = mean(inclusion_matrix, dims=2)[:, 1]
+
+    c_opt, selection = MirrorStatistic.posterior_fdr_threshold(
+        mean_inclusion_per_coef,
+        fdr_target
+    )
+
+    metrics_mc = MirrorStatistic.wrapper_metrics(
+        data_dict["beta"] .!= 0.,
+        selection
+    )
+    metrics_dict["metrics_mc"] = metrics_mc
+    
     simulations_metrics[simu] = metrics_dict
 
 end
 
 
+mc_fdr = []
+mc_tpr = []
 posterior_fdr = []
 posterior_tpr = []
 
 for simu = 1:n_simulations
+    push!(mc_fdr, simulations_metrics[simu]["metrics_mc"].fdr)
+    push!(mc_tpr, simulations_metrics[simu]["metrics_mc"].tpr)
+
     push!(posterior_fdr, simulations_metrics[simu]["metrics_posterior"].fdr)
     push!(posterior_tpr, simulations_metrics[simu]["metrics_posterior"].tpr)
 end
+
+all_metrics = hcat(mc_fdr, posterior_fdr, mc_tpr, posterior_tpr)
+df = DataFrame(all_metrics, ["mc_fdr", "posterior_fdr", "mc_tpr", "posterior_tpr"])
+
 mean(posterior_fdr)
-median(posterior_fdr)
+mean(mc_fdr)
 
 all_metrics = hcat(posterior_fdr, posterior_tpr)
 df = DataFrame(all_metrics, ["posterior_fdr", "posterior_tpr"])
@@ -196,6 +222,19 @@ boxplot!([1], posterior_fdr, label=false, color="blue", fillalpha=0.1, linewidth
 
 violin!([2], posterior_tpr, color="lightblue", label=false, alpha=1, linewidth=0)
 boxplot!([2], posterior_tpr, label=false, color="blue", fillalpha=0.1, linewidth=2)
+
+xticks!([1, 2], ["FDR", "TPR"], tickfontsize=15)
+yticks!(range(0, 1, step=0.1), tickfontsize=15)
+
+savefig(plt, joinpath(abs_project_path, "results", "simulations", "$(label_files)_fdrtpr_boxplot.pdf"))
+
+
+# MC
+plt = violin([1], mc_fdr, color="lightblue", label=false, alpha=1, linewidth=0)
+boxplot!([1], mc_fdr, label=false, color="blue", fillalpha=0.1, linewidth=2)
+
+violin!([2], mc_tpr, color="lightblue", label=false, alpha=1, linewidth=0)
+boxplot!([2], mc_tpr, label=false, color="blue", fillalpha=0.1, linewidth=2)
 
 xticks!([1, 2], ["FDR", "TPR"], tickfontsize=15)
 yticks!(range(0, 1, step=0.1), tickfontsize=15)
@@ -223,194 +262,158 @@ y_train = data_dict["y"][train_ids]
 y_test = data_dict["y"][test_ids]
 
 
-tau2_vec = [0.01, 0.1, 0.5, 1., 3.]
-loss = []
-sum_coefs = []
-fdr = []
-
-for tau2 in tau2_vec
-    println("tau = : $(tau2)")
-
-    params_dict = OrderedDict()
-
-    # beta 0
-    update_parameters_dict(
-        params_dict;
-        name="beta0",
-        dimension=(1,),
-        log_prob_fun=x::Float32 -> DistributionsLogPdf.log_normal(x)
-    )
-
-    # beta fixed
-    update_parameters_dict(
-        params_dict;
-        name="sigma_beta",
-        dimension=(p, ),
-        bij=VectorizedBijectors.softplus,
-        log_prob_fun=x::AbstractArray{Float32} -> DistributionsLogPdf.log_half_cauchy(
-            x, sigma=Float32.(ones(p) * tau2)
-        )
-    )
-    update_parameters_dict(
-        params_dict;
-        name="beta",
-        dimension=(p,),
-        log_prob_fun=(x::AbstractArray{Float32}, sigma::AbstractArray{Float32}) -> DistributionsLogPdf.log_normal(x, sigma=sigma),
-        dependency=["sigma_beta"]
-    )
-
-    theta_axes, theta_components = get_parameters_axes(params_dict)
-
-    # model predictions
-    model(theta_components) = Predictors.linear_predictor(
-        theta_components;
-        X=X_train,
-        link=identity
-    )
-
-    # model
-    partial_log_joint(theta) = log_joint(
-        theta;
-        params_dict=params_dict,
-        theta_axes=theta_axes,
-        model=model,
-        log_likelihood=DistributionsLogPdf.log_bernoulli_from_logit,
-        label=y_train
-    )
-
-    # VI distribution
-    vi_dist(z::AbstractArray) = VariationalDistributions.meanfield(z, tot_params=params_dict["tot_params"])
-
-    # Training
-    res = training_loop(;
-        log_joint=partial_log_joint,
-        vi_dist=vi_dist,
-        z_dim=params_dict["tot_params"]*2,
-        n_iter=2000,
-        n_chains=1,
-        samples_per_step=2,
-        sd_init=0.5f0,
-        use_noisy_grads=false,
-        n_cycles=1
-    )
-
-    plot(res["elbo_trace"])
-    plot(res["elbo_trace"][2000:end, :])
-    Int.(res["best_iter"])
-
-    vi_posterior = average_posterior(
-        res["posteriors"],
-        Distributions.MultivariateNormal
-    )
-
-    ms_dist = MirrorStatistic.posterior_ms_coefficients(
-        vi_posterior=vi_posterior,
-        prior="beta",
-        params_dict=params_dict
-    )
-
-    metrics = MirrorStatistic.optimal_inclusion(
-        ms_dist_vec=ms_dist,
-        mc_samples=MC_SAMPLES,
-        beta_true=data_dict["beta"],
-        fdr_target=fdr_target
-    )
-    n_inclusion_per_coef = sum(metrics.inclusion_matrix, dims=2)[:,1]
-    mean_inclusion_per_coef = mean(metrics.inclusion_matrix, dims=2)[:,1]
-
-    c_opt, selection = MirrorStatistic.posterior_fdr_threshold(
-        mean_inclusion_per_coef,
-        fdr_target
-    )
-    # push!(sum_coefs, sum((1 .- mean_inclusion_per_coef) .<= c_opt))
-
-    metrics = MirrorStatistic.wrapper_metrics(
-        data_dict["beta"] .!= 0.,
-        selection
-    )
-    # push!(fdr, metrics.fdr)
-
-    samples_posterior = posterior_samples(
-        vi_posterior=vi_posterior,
-        params_dict=params_dict,
-        n_samples=MC_SAMPLES,
-        transform_with_bijectors=true
-    )
-
-    beta_samples = extract_parameter(
-        prior="beta",
-        params_dict=params_dict,
-        samples_posterior=samples_posterior
-    )
-    density(beta_samples', label=false)
-    density(beta_samples[selection, :]', label=false)
-
-    scatter(mean(beta_samples[selection, :], dims=2), label=false)
-
-    sigma_beta_samples = extract_parameter(
-        prior="sigma_beta",
-        params_dict=params_dict,
-        samples_posterior=samples_posterior
-    )
-    density(sigma_beta_samples', label=false)
-
-    tau_samples = extract_parameter(
-        prior="hyper_sigma_beta",
-        params_dict=params_dict,
-        samples_posterior=samples_posterior
-    )
-    density(tau_samples', label=false)
-
-    mean_beta = mean(beta_samples, dims=2)[:, 1]
-    mean_sigma_beta = mean(sigma_beta_samples, dims=2)[:, 1]
-
-    rand_beta = randn(sum(selection), 1000) .* mean_sigma_beta[selection] .+ mean_beta[selection]
-    scatter(rand_beta', label=false)
-    inc_probs = 1. .- 1 ./ (1 .+ mean_sigma_beta.^2)
-    scatter(inc_probs)
-    
-    sum(1 .- inc_probs[selection]) / sum(selection)
-    tau, sel = MirrorStatistic.posterior_fdr_threshold(
-        inc_probs,
-        0.1
-    )
-    sum(1 .- inc_probs[sel]) / sum(sel)
-    density(beta_samples[sel, :]', label=false)
-    metrics = MirrorStatistic.wrapper_metrics(
-        data_dict["beta"] .!= 0.,
-        sel
-    )
-
-    # tau_samples = extract_parameter(
-    #     prior="hyper_sigma_beta",
-    #     params_dict=params_dict,
-    #     samples_posterior=samples_posterior
-    # )
-
-    beta0_samples = extract_parameter(
-        prior="beta0",
-        params_dict=params_dict,
-        samples_posterior=samples_posterior
-    )
-
-    # Prediction
-    y_pred = zeros(n_individuals, MC_SAMPLES)
-    beta_mean = mean(beta_samples, dims=2)[:, 1]
-    beta0_mean = mean(beta0_samples)
-    y_pred = X_test * beta_mean .+ beta0_mean
-
-    # for mc = 1:MC_SAMPLES
-    #     y_pred[:, mc] = X_test * beta_samples[:, mc] .+ beta0_samples[mc]
-    # end
-    loglik = Flux.Losses.logitbinarycrossentropy(y_test, y_pred)
-
-    # loglik = sum(DistributionsLogPdf.log_bernoulli_from_logit(
-    #     y_test,
-    #     y_pred
-    # ))
-    push!(loss, loglik)
-
+function model(theta::AbstractArray; X::AbstractArray, prior_position=prior_position)
+    beta_reg = theta[prior_position[:beta]] .* theta[prior_position[:sigma_beta]]
+    mu = X * beta_reg .+ theta[prior_position[:beta0]]
+    return (mu, )
 end
+
+# Training
+z = VariationalDistributions.get_init_z(params_dict, dtype=Float64)
+optimiser = MyOptimisers.DecayedADAGrad()
+# optimiser = Optimisers.RMSProp(0.01)
+
+res = hybrid_training_loop(
+    z=z,
+    y=y_train,
+    X=X_train,
+    params_dict=params_dict,
+    model=model,
+    log_likelihood=DistributionsLogPdf.log_bernoulli_from_logit,
+    log_prior=x::AbstractArray -> compute_logpdf_prior(x; params_dict=params_dict),
+    n_iter=num_iter,
+    optimiser=optimiser,
+    save_all=false,
+    use_noisy_grads=false,
+    elbo_samples=3
+)
+
+z = res["best_iter_dict"]["best_z"]
+
+q = VariationalDistributions.get_variational_dist(
+    z,
+    params_dict["vi_family_array"],
+    params_dict["ranges_z"]
+)
+
+# ------ Mirror Statistic ------
+
+plot(res["loss_dict"]["loss"])
+plot(res["loss_dict"]["loss"][1500:end])
+
+# Get VI distribution
+res["best_iter_dict"]["best_iter"]
+res["best_iter_dict"]["best_z"]
+res["best_iter_dict"]["final_z"]
+
+beta_samples = rand(q[prior_position[:beta]], MC_SAMPLES)
+sigma_samples = rand(q[prior_position[:sigma_beta]], MC_SAMPLES)
+
+density(beta_samples')
+density(beta_samples' .* sigma_samples')
+
+
+ms_dist = MirrorStatistic.posterior_ms_coefficients(
+    q[prior_position[:beta]].dist
+)
+
+metrics = MirrorStatistic.optimal_inclusion(
+    ms_dist_vec=ms_dist,
+    mc_samples=MC_SAMPLES,
+    beta_true=data_dict["beta"],
+    fdr_target=fdr_target
+)
+n_inclusion_per_coef = sum(metrics.inclusion_matrix, dims=2)[:,1]
+mean_inclusion_per_coef = mean(metrics.inclusion_matrix, dims=2)[:,1]
+
+c_opt, selection = MirrorStatistic.posterior_fdr_threshold(
+    mean_inclusion_per_coef,
+    fdr_target
+)
+
+metrics = MirrorStatistic.wrapper_metrics(
+    data_dict["beta"] .!= 0.,
+    selection
+)
+
+samples_posterior = posterior_samples(
+    vi_posterior=vi_posterior,
+    params_dict=params_dict,
+    n_samples=MC_SAMPLES,
+    transform_with_bijectors=true
+)
+
+beta_samples = extract_parameter(
+    prior="beta",
+    params_dict=params_dict,
+    samples_posterior=samples_posterior
+)
+density(beta_samples', label=false)
+density(beta_samples[selection, :]', label=false)
+
+scatter(mean(beta_samples[selection, :], dims=2), label=false)
+
+sigma_beta_samples = extract_parameter(
+    prior="sigma_beta",
+    params_dict=params_dict,
+    samples_posterior=samples_posterior
+)
+density(sigma_beta_samples', label=false)
+
+tau_samples = extract_parameter(
+    prior="hyper_sigma_beta",
+    params_dict=params_dict,
+    samples_posterior=samples_posterior
+)
+density(tau_samples', label=false)
+
+mean_beta = mean(beta_samples, dims=2)[:, 1]
+mean_sigma_beta = mean(sigma_beta_samples, dims=2)[:, 1]
+
+rand_beta = randn(sum(selection), 1000) .* mean_sigma_beta[selection] .+ mean_beta[selection]
+scatter(rand_beta', label=false)
+inc_probs = 1. .- 1 ./ (1 .+ mean_sigma_beta.^2)
+scatter(inc_probs)
+
+sum(1 .- inc_probs[selection]) / sum(selection)
+tau, sel = MirrorStatistic.posterior_fdr_threshold(
+    inc_probs,
+    0.1
+)
+sum(1 .- inc_probs[sel]) / sum(sel)
+density(beta_samples[sel, :]', label=false)
+metrics = MirrorStatistic.wrapper_metrics(
+    data_dict["beta"] .!= 0.,
+    sel
+)
+
+# tau_samples = extract_parameter(
+#     prior="hyper_sigma_beta",
+#     params_dict=params_dict,
+#     samples_posterior=samples_posterior
+# )
+
+beta0_samples = extract_parameter(
+    prior="beta0",
+    params_dict=params_dict,
+    samples_posterior=samples_posterior
+)
+
+# Prediction
+y_pred = zeros(n_individuals, MC_SAMPLES)
+beta_mean = mean(beta_samples, dims=2)[:, 1]
+beta0_mean = mean(beta0_samples)
+y_pred = X_test * beta_mean .+ beta0_mean
+
+# for mc = 1:MC_SAMPLES
+#     y_pred[:, mc] = X_test * beta_samples[:, mc] .+ beta0_samples[mc]
+# end
+loglik = Flux.Losses.logitbinarycrossentropy(y_test, y_pred)
+
+# loglik = sum(DistributionsLogPdf.log_bernoulli_from_logit(
+#     y_test,
+#     y_pred
+# ))
 
 scatter(loss, label="loss")
 scatter!(fdr*100, label="fdr")
