@@ -2,6 +2,7 @@
 using ProgressMeter
 using Zygote
 using Optimisers
+using ComponentArrays, UnPack
 
 
 function polynomial_decay(t::Int64; a::Float32=1f0, b::Float32=0.01f0, gamma::Float32=0.75f0)
@@ -19,20 +20,42 @@ function cyclical_polynomial_decay(n_iter::Int64, n_cycles::Int64=2)
 end
 
 
-function compute_logpdf_prior(theta::AbstractArray; params_dict::OrderedDict)
+function compute_logpdf_prior(theta::ComponentArray; params_dict::OrderedDict)
     log_prior = 0f0
     priors = params_dict["priors"]
-    tuple_name = params_dict["tuple_prior_position"]
 
     for (ii, prior) in enumerate(keys(priors))
         deps = priors[prior]["dependency"]
         log_prior += sum(priors[prior]["logpdf_prior"](
-            theta[ii],
-            [theta[tuple_name[Symbol(dep)]] for dep in deps]...
+            theta[Symbol(prior)],
+            [theta[Symbol(dep)] for dep in deps]...
         ))
     end
 
     return log_prior
+end
+
+
+function get_parameters_axes(params_dict)
+    
+    # Get params axes
+    theta_components = tuple(Symbol.(params_dict["priors"].keys)...)
+
+    vector_init = []
+    for pp in params_dict["priors"].keys
+
+        if prod(params_dict["priors"][pp]["dim_theta"]) > 1
+            param_init = ones(params_dict["priors"][pp]["dim_theta"])
+        else
+            param_init = ones(params_dict["priors"][pp]["dim_theta"])[1]
+        end
+        push!(vector_init, Symbol(pp) => param_init)
+    end
+
+    proto_array = ComponentArray(; vector_init...)
+    theta_axes = getaxes(proto_array)
+
+    return theta_axes
 end
 
 
@@ -44,9 +67,11 @@ function elbo(
     vi_family_array::AbstractArray,
     random_weights::AbstractArray,
     model,
+    theta_axes,
     log_likelihood,
     log_prior=zero,
-    n_samples::Int64=1
+    n_samples::Int64=1,
+    n_repeated_measures::Int64=1
     )
 
     # get a specific distribution using the weights z, from the variational family
@@ -56,12 +81,23 @@ function elbo(
     res = zero(eltype(z))
 
     for mc = 1:n_samples
+        
         # random sample from VI distribution
         theta, abs_jacobian = VariationalDistributions.rand_with_logjacobian(q_dist_array, random_weights=random_weights)
+        theta_components = ComponentArray(theta, theta_axes)
+
         # evaluate the log-joint
-        pred = model(theta; X=X)
-        loglik = sum(log_likelihood(y, pred...))
-        logprior = sum(log_prior(theta))
+        loglik = 0.
+        if n_repeated_measures == 1
+            pred = model(theta_components; X=X)
+            loglik += sum(log_likelihood(y, pred...))
+        else
+            for measurement = 1:n_repeated_measures
+                pred = model(theta_components, measurement; X=X)
+                loglik += sum(log_likelihood(y[:, :, measurement], pred...))
+            end
+        end
+        logprior = sum(log_prior(theta_components))
 
         res += (loglik + logprior + sum(abs_jacobian)) / n_samples
     end
@@ -88,13 +124,15 @@ function hybrid_training_loop(;
     save_all::Bool=false,
     use_noisy_grads::Bool=false,
     elbo_samples::Int64=1,
-    lr_schedule=nothing
+    lr_schedule=nothing,
+    n_repeated_measures::Int64=1
     )
 
     vi_family_array = params_dict["vi_family_array"]
     ranges_z = params_dict["ranges_z"]
     random_weights = params_dict["random_weights"]
     noisy_gradients = params_dict["noisy_gradients"]
+    theta_axes = get_parameters_axes(params_dict)
 
     # store best setting
     best_z = copy(z)
@@ -125,9 +163,11 @@ function hybrid_training_loop(;
                 vi_family_array=vi_family_array,
                 random_weights=random_weights,
                 model=model,
+                theta_axes=theta_axes,
                 log_likelihood=log_likelihood,
                 log_prior=log_prior,
-                n_samples=elbo_samples
+                n_samples=elbo_samples,
+                n_repeated_measures=n_repeated_measures
             )
         end
     

@@ -262,9 +262,9 @@ y_train = data_dict["y"][train_ids]
 y_test = data_dict["y"][test_ids]
 
 
-function model(theta::AbstractArray; X::AbstractArray, prior_position=prior_position)
-    beta_reg = theta[prior_position[:beta]] .* theta[prior_position[:sigma_beta]]
-    mu = X * beta_reg .+ theta[prior_position[:beta0]]
+function model(theta::ComponentArray; X::AbstractArray)
+    beta_reg = theta[:beta] .* theta[:sigma_beta]
+    mu = X * beta_reg .+ theta[:beta0]
     return (mu, )
 end
 
@@ -336,68 +336,9 @@ metrics = MirrorStatistic.wrapper_metrics(
     selection
 )
 
-samples_posterior = posterior_samples(
-    vi_posterior=vi_posterior,
-    params_dict=params_dict,
-    n_samples=MC_SAMPLES,
-    transform_with_bijectors=true
-)
-
-beta_samples = extract_parameter(
-    prior="beta",
-    params_dict=params_dict,
-    samples_posterior=samples_posterior
-)
-density(beta_samples', label=false)
 density(beta_samples[selection, :]', label=false)
 
 scatter(mean(beta_samples[selection, :], dims=2), label=false)
-
-sigma_beta_samples = extract_parameter(
-    prior="sigma_beta",
-    params_dict=params_dict,
-    samples_posterior=samples_posterior
-)
-density(sigma_beta_samples', label=false)
-
-tau_samples = extract_parameter(
-    prior="hyper_sigma_beta",
-    params_dict=params_dict,
-    samples_posterior=samples_posterior
-)
-density(tau_samples', label=false)
-
-mean_beta = mean(beta_samples, dims=2)[:, 1]
-mean_sigma_beta = mean(sigma_beta_samples, dims=2)[:, 1]
-
-rand_beta = randn(sum(selection), 1000) .* mean_sigma_beta[selection] .+ mean_beta[selection]
-scatter(rand_beta', label=false)
-inc_probs = 1. .- 1 ./ (1 .+ mean_sigma_beta.^2)
-scatter(inc_probs)
-
-sum(1 .- inc_probs[selection]) / sum(selection)
-tau, sel = MirrorStatistic.posterior_fdr_threshold(
-    inc_probs,
-    0.1
-)
-sum(1 .- inc_probs[sel]) / sum(sel)
-density(beta_samples[sel, :]', label=false)
-metrics = MirrorStatistic.wrapper_metrics(
-    data_dict["beta"] .!= 0.,
-    sel
-)
-
-# tau_samples = extract_parameter(
-#     prior="hyper_sigma_beta",
-#     params_dict=params_dict,
-#     samples_posterior=samples_posterior
-# )
-
-beta0_samples = extract_parameter(
-    prior="beta0",
-    params_dict=params_dict,
-    samples_posterior=samples_posterior
-)
 
 # Prediction
 y_pred = zeros(n_individuals, MC_SAMPLES)

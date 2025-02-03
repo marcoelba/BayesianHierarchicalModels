@@ -10,9 +10,10 @@ abs_project_path = normpath(joinpath(@__FILE__, "..", "..", ".."))
 include(joinpath(abs_project_path, "src", "model_building", "normal_degenerate.jl"))
 
 
+function get_variational_dist(z::AbstractArray, vi_family_array, ranges_z)
+    
+    q_vi = [vi_family_array[cc](z[ranges_z[cc]]) for cc in eachindex(vi_family_array)]
 
-function get_variational_dist(z::AbstractArray, q_family_array::AbstractArray, range_z::AbstractVector)
-    q_vi = [q_family_array[cc](z[range_z[cc]]) for cc in eachindex(q_family_array)]
     return q_vi
 end
 
@@ -51,7 +52,7 @@ function rand_with_logjacobian(q_dist_array::AbstractArray; random_weights::Abst
         abs_jacobian += random_weights[ii] * Bijectors.jacobian(q_dist_array[ii].transform, x[ii], x_t[ii])
     end
 
-    return x_t, abs_jacobian
+    return reduce(vcat, x_t), abs_jacobian
 end
 
 
