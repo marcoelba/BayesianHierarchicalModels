@@ -37,7 +37,7 @@ num_iter = 1000
 MC_SAMPLES = 1000
 fdr_target = 0.1
 n_simulations = 30
-random_seed = 1256
+random_seed = 125
 simulations_models = Dict()
 simulations_metrics = Dict()
 
@@ -72,7 +72,7 @@ update_parameters_dict(
     params_dict;
     name="sigma_beta",
     dim_theta=(p, ),
-    logpdf_prior=x::AbstractArray -> DistributionsLogPdf.log_beta(x, 0.5, 0.5),
+    logpdf_prior=x::AbstractArray -> DistributionsLogPdf.log_beta(x, 1, 1),
     dim_z=p*2,
     vi_family=z::AbstractArray -> VariationalDistributions.vi_mv_normal(z; bij=LogExpFunctions.logistic),
     init_z=vcat(randn(p)*0.1, randn(p)*0.1),
@@ -98,7 +98,7 @@ for simu = 1:n_simulations
 
     data_dict = generate_logistic_model_data(;
         n_individuals, class_threshold=0.5f0,
-        p, p1, p0, beta_pool=Float32.([-2., 2]), obs_noise_sd=0.5, corr_factor=0.5,
+        p, p1, p0, beta_pool=Float32.([-2, -1, 1, 2]), obs_noise_sd=0.5, corr_factor=0.5,
         random_seed=124 + simu, dtype=Float32
     )
     
@@ -208,9 +208,6 @@ df = DataFrame(all_metrics, ["mc_fdr", "posterior_fdr", "mc_tpr", "posterior_tpr
 mean(posterior_fdr)
 mean(mc_fdr)
 
-all_metrics = hcat(posterior_fdr, posterior_tpr)
-df = DataFrame(all_metrics, ["posterior_fdr", "posterior_tpr"])
-
 CSV.write(
     joinpath(abs_project_path, "results", "simulations", "$(label_files).csv"),
     df
@@ -247,7 +244,7 @@ savefig(plt, joinpath(abs_project_path, "results", "simulations", "$(label_files
 n = n_individuals * 2
 data_dict = generate_logistic_model_data(;
     n_individuals=n, class_threshold=0.5f0,
-    p, p1, p0, beta_pool=Float32.([-1., 1]), obs_noise_sd=0.5, corr_factor=0.5,
+    p, p1, p0, beta_pool=Float32.([-2., 2]), obs_noise_sd=0.5, corr_factor=0.5,
     random_seed=124, dtype=Float32
 )
 
@@ -296,10 +293,8 @@ q = VariationalDistributions.get_variational_dist(
     params_dict["ranges_z"]
 )
 
-# ------ Mirror Statistic ------
-
 plot(res["loss_dict"]["loss"])
-plot(res["loss_dict"]["loss"][1500:end])
+plot(res["loss_dict"]["loss"][500:end])
 
 # Get VI distribution
 res["best_iter_dict"]["best_iter"]
@@ -312,6 +307,10 @@ sigma_samples = rand(q[prior_position[:sigma_beta]], MC_SAMPLES)
 density(beta_samples')
 density(beta_samples' .* sigma_samples')
 
+plt = density(beta_samples' .* sigma_samples', label=false)
+ylabel!("Density")
+savefig(plt, joinpath(abs_project_path, "results", "simulations", "$(label_files)_posterior_beta.pdf"))
+
 
 ms_dist = MirrorStatistic.posterior_ms_coefficients(
     q[prior_position[:beta]].dist
@@ -323,125 +322,8 @@ metrics = MirrorStatistic.optimal_inclusion(
     beta_true=data_dict["beta"],
     fdr_target=fdr_target
 )
-n_inclusion_per_coef = sum(metrics.inclusion_matrix, dims=2)[:,1]
-mean_inclusion_per_coef = mean(metrics.inclusion_matrix, dims=2)[:,1]
-
-c_opt, selection = MirrorStatistic.posterior_fdr_threshold(
-    mean_inclusion_per_coef,
-    fdr_target
-)
-
-metrics = MirrorStatistic.wrapper_metrics(
-    data_dict["beta"] .!= 0.,
-    selection
-)
-
-density(beta_samples[selection, :]', label=false)
-
-scatter(mean(beta_samples[selection, :], dims=2), label=false)
-
-# Prediction
-y_pred = zeros(n_individuals, MC_SAMPLES)
-beta_mean = mean(beta_samples, dims=2)[:, 1]
-beta0_mean = mean(beta0_samples)
-y_pred = X_test * beta_mean .+ beta0_mean
-
-# for mc = 1:MC_SAMPLES
-#     y_pred[:, mc] = X_test * beta_samples[:, mc] .+ beta0_samples[mc]
-# end
-loglik = Flux.Losses.logitbinarycrossentropy(y_test, y_pred)
-
-# loglik = sum(DistributionsLogPdf.log_bernoulli_from_logit(
-#     y_test,
-#     y_pred
-# ))
-
-scatter(loss, label="loss")
-scatter!(fdr*100, label="fdr")
-scatter!(sum_coefs, label="n")
-
-
-##### -------------------------- ###### --------------------------
-y_pred = X_test * data_dict["beta"] .+ data_dict["beta0"]
-loglik_true = sum(DistributionsLogPdf.log_bernoulli_from_logit(
-    y_test,
-    y_pred
-))
-# -32.92
-
-samples_posterior = posterior_samples(
-    vi_posterior=vi_posterior,
-    params_dict=params_dict,
-    n_samples=MC_SAMPLES
-)
-beta0_samples = mean(extract_parameter(
-    prior="beta0",
-    params_dict=params_dict,
-    samples_posterior=samples_posterior
-))
-beta_samples = mean(extract_parameter(
-    prior="beta",
-    params_dict=params_dict,
-    samples_posterior=samples_posterior
-), dims=2)[:, 1]
-
-sigma_beta_samples = mean(extract_parameter(
-    prior="sigma_beta",
-    params_dict=params_dict,
-    samples_posterior=samples_posterior
-), dims=2)[:, 1]
-
-beta_wrong = copy(beta_samples)
-beta_wrong[selection .== 0] .= 0f0
-y_pred = X_test * beta_wrong .+ data_dict["beta0"]
-loglik = sum(DistributionsLogPdf.log_bernoulli_from_logit(
-    y_test,
-    y_pred
-))
-# - 222
-
-beta_wrong = copy(beta_samples)
-beta_wrong[1:p0] .= 0f0
-y_pred = X_test * beta_wrong .+ data_dict["beta0"]
-loglik = sum(DistributionsLogPdf.log_bernoulli_from_logit(
-    y_test,
-    y_pred
-))
-
-params_dict["priors"]
-log_joint(
-    Float32.(vcat(beta0_samples, sigma, beta_wrong)),
-    params_dict=params_dict,
-    theta_axes=theta_axes,
-    model=model,
-    log_likelihood=DistributionsLogPdf.log_bernoulli_from_logit,
-    label=y_test
-)
-# -2284
-
-##### --------------------------###### --------------------------
-
-
-
-# ------ Mirror Statistic ------
-
-ms_dist = MirrorStatistic.posterior_ms_coefficients(
-    vi_posterior=vi_posterior,
-    prior="beta",
-    params_dict=params_dict
-)
-
-metrics = MirrorStatistic.optimal_inclusion(
-    ms_dist_vec=ms_dist,
-    mc_samples=MC_SAMPLES,
-    beta_true=data_dict["beta"],
-    fdr_target=fdr_target
-)
 
 # distribution
-plt = fdr_n_hist(metrics)
-savefig(plt, joinpath(abs_project_path, "results", "simulations", "$(label_files)_fdr_n_hist.pdf"))
-
 plt_n = histogram(metrics.n_inclusion_per_mc, bins=10, label=false, normalize=true)
 xlabel!("# variables included", labelfontsize=15)
 vline!([mean(metrics.n_inclusion_per_mc)], color = :red, linewidth=5, label="average")
@@ -455,7 +337,6 @@ c_opt, selection = MirrorStatistic.posterior_fdr_threshold(
     mean_inclusion_per_coef,
     fdr_target
 )
-sum((1 .- mean_inclusion_per_coef) .<= c_opt)
 
 metrics = MirrorStatistic.wrapper_metrics(
     data_dict["beta"] .!= 0.,
@@ -480,6 +361,30 @@ savefig(plt_probs, joinpath(abs_project_path, "results", "ms_analysis", "$(label
 
 plt = plot(plt_n, plt_probs)
 savefig(plt, joinpath(abs_project_path, "results", "simulations", "$(label_files)_n_and_probs.pdf"))
+
+
+# Monte Carlo loop
+mc_samples = 2000
+ms_samples = Int(mc_samples / 2)
+mean_sigma = mean(rand(q[prior_position[:sigma_beta]], mc_samples), dims=2)[:, 1]
+scatter(mean_sigma)
+beta = rand(q[prior_position[:beta]], mc_samples) .* mean_sigma
+density(beta')
+
+ms_coeffs = MirrorStatistic.mirror_statistic(beta[:, 1:ms_samples], beta[:, ms_samples+1:mc_samples])
+opt_t = MirrorStatistic.get_t(ms_coeffs; fdr_target=0.1)
+inclusion_matrix = ms_coeffs .> opt_t
+mean_inclusion_per_coef = mean(inclusion_matrix, dims=2)[:, 1]
+
+c_opt, selection = MirrorStatistic.posterior_fdr_threshold(
+    mean_inclusion_per_coef,
+    fdr_target
+)
+
+metrics_mc = MirrorStatistic.wrapper_metrics(
+    data_dict["beta"] .!= 0.,
+    selection
+)
 
 
 #### GLMNet #####
@@ -507,8 +412,8 @@ for simu = 1:n_simulations
 
     data_dict = generate_logistic_model_data(;
         n_individuals, class_threshold=0.5f0,
-        p, p1, p0, beta_pool=Float32.([-2., 2]), obs_noise_sd=0.5, corr_factor=0.5,
-        random_seed=124 + simu, dtype=Float32
+        p, p1, p0, beta_pool=Float32.([-2., -1, 1, 2]), obs_noise_sd=0.5, corr_factor=0.5,
+        random_seed=random_seed + simu, dtype=Float32
     )
 
     Xk_0 = rand(MultivariateNormal(data_dict["cov_matrix_0"]), n_individuals)

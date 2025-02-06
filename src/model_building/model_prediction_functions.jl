@@ -45,15 +45,18 @@ end
 
 
 function random_intercept_model(
-    theta::ComponentArray;
-    n_individuals,
-    n_repetitions
+    theta::ComponentArray,
+    rep_index::Int64;
+    X::AbstractArray
     )
+    n, p = size(X)
 
-    mu = [theta[:beta0_fixed] .+ theta[:beta0_random] for rep = 1:n_repetitions]
-    sigma = Float32.(ones(n_individuals, n_repetitions)) .* theta[:sigma_y]
+    beta_reg = theta[:sigma_beta] .* theta[:beta_fixed]
 
-    return (reduce(hcat, mu), sigma)
+    mu = theta[:beta0_fixed] .+ theta[:beta0_random] .+ X * beta_reg[:, rep_index]
+    sigma = ones(eltype(X), n) .* theta[:sigma_y]
+
+    return (mu, sigma)
 end
 
 
@@ -82,12 +85,15 @@ function linear_time_random_intercept_model(
     X::AbstractArray
     )
     n_individuals, p = size(X)
-    n_time_points = size(theta[:beta_time], 1)
+
+    beta_time = theta[:beta_time]
+    beta_reg = theta[:sigma_beta] .* theta[:beta_fixed]
+    n_time_points = size(beta_time, 1)
 
     # baseline
-    mu_baseline = theta[:beta_time][1, rep_index] .+ theta[:beta0_random] .+ X * theta[:beta_fixed][:, 1, rep_index]
+    mu_baseline = beta_time[1, rep_index] .+ theta[:beta0_random] .+ X * beta_reg[:, 1, rep_index]
     mu_inc = [
-        Float32.(ones(n_individuals)) .* theta[:beta_time][tt, rep_index] .+ X * theta[:beta_fixed][:, tt, rep_index] for tt = 2:n_time_points
+        Float32.(ones(n_individuals)) .* beta_time[tt, rep_index] .+ X * beta_reg[:, tt, rep_index] for tt = 2:n_time_points
     ]
     
     mu_matrix = reduce(hcat, [mu_baseline, reduce(hcat, mu_inc)])

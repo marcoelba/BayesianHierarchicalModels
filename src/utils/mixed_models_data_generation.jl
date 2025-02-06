@@ -179,6 +179,74 @@ function generate_logistic_model_data(;
 end
 
 
+function generate_multiple_measurements_data(;
+    n_individuals, n_repeated_measures,
+    p, p1, p0,
+    beta_pool=Float32.([-1., -2., 1, 2]),
+    sd_noise_beta_reps=0.,
+    obs_noise_sd=1.,
+    corr_factor=0.5,
+    beta0_fixed=1.,
+    include_random_int=false, random_int_from_pool=false,
+    random_intercept_sd=0.3,
+    beta0_pool=Float32.([-2, -1.5, -0.5, 0, 0.5, 1.5, 2]),
+    random_seed=124,
+    dtype=Float32
+    )
+
+    data_dict = Dict()
+
+    Random.seed!(random_seed)
+
+    # Fixed effects
+    # block covariance matrix
+    cor_coefs_0 = vcat([1.], [corr_factor * (p0 - ll) / (p0 - 1) for ll in range(1, p0-1)])
+    cor_coefs_1 = vcat([1.], [corr_factor * (p1 - ll) / (p1 - 1) for ll in range(1, p1-1)])
+    cov_matrix_0 = Array(Toeplitz(cor_coefs_0, cor_coefs_0))
+    cov_matrix_1 = Array(Toeplitz(cor_coefs_1, cor_coefs_1))
+
+    Xfix_0 = rand(MultivariateNormal(cov_matrix_0), n_individuals)
+    Xfix_1 = rand(MultivariateNormal(cov_matrix_1), n_individuals)
+    Xfix = transpose(vcat(Xfix_0, Xfix_1))
+
+    data_dict["Xfix"] = dtype.(Xfix)
+
+    # beta fixed
+    beta_fixed = zeros(p, n_repeated_measures)
+    active_coefficients = Random.rand(beta_pool, p1)
+    beta_reg = dtype.(vcat(zeros(p0), active_coefficients))
+    data_dict["beta_reg"] = beta_reg
+    mask = beta_reg .!= 0
+
+    for rep = 1:n_repeated_measures
+        beta_fixed[:, rep] = beta_reg .+ mask .* randn(size(beta_reg)) * dtype(sd_noise_beta_reps)
+    end
+    data_dict["beta_fixed"] = beta_fixed
+    
+    # > RANDOM EFFETCS <
+    # Random Intercept (one per individual)
+    if include_random_int
+        if random_int_from_pool
+            beta0_random = sample(beta0_pool, n_individuals, replace=true)
+        else
+            beta0_random = dtype.(Random.randn(n_individuals) .* random_intercept_sd)
+        end
+        data_dict["beta0_random"] = beta0_random
+    end
+    
+    # Predictor
+    array_mu = zeros(n_individuals, n_repeated_measures)
+    for rep = 1:n_repeated_measures
+        array_mu[:, rep] = beta0_fixed .+ beta0_random .+ Xfix * beta_fixed[:, rep]
+    end
+    
+    y = dtype.(array_mu .+ Random.randn(n_individuals, n_repeated_measures) * obs_noise_sd)
+    data_dict["y"] = y
+
+    return data_dict
+end
+
+
 function generate_time_interaction_model_data(;
     n_individuals, n_time_points,
     p, p1, p0, beta_pool=Float32.([-1., -2., 1, 2]),

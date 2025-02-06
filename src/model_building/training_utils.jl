@@ -76,6 +76,7 @@ function elbo(
 
     # get a specific distribution using the weights z, from the variational family
     q_dist_array = VariationalDistributions.get_variational_dist(z, vi_family_array, ranges_z)
+    ndims_y = ndims(y)
 
     # evaluate the log-joint
     res = zero(eltype(z))
@@ -94,7 +95,7 @@ function elbo(
         else
             for measurement = 1:n_repeated_measures
                 pred = model(theta_components, measurement; X=X)
-                loglik += sum(log_likelihood(y[:, :, measurement], pred...))
+                loglik += sum(log_likelihood(selectdim(y, ndims_y, measurement), pred...))
             end
         end
         logprior = sum(log_prior(theta_components))
