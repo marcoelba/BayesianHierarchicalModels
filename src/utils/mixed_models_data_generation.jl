@@ -187,7 +187,7 @@ function generate_multiple_measurements_data(;
     obs_noise_sd=1.,
     corr_factor=0.5,
     beta0_fixed=1.,
-    include_random_int=false, random_int_from_pool=false,
+    random_int_from_pool=false,
     random_intercept_sd=0.3,
     beta0_pool=Float32.([-2, -1.5, -0.5, 0, 0.5, 1.5, 2]),
     random_seed=124,
@@ -225,14 +225,12 @@ function generate_multiple_measurements_data(;
     
     # > RANDOM EFFETCS <
     # Random Intercept (one per individual)
-    if include_random_int
-        if random_int_from_pool
-            beta0_random = sample(beta0_pool, n_individuals, replace=true)
-        else
-            beta0_random = dtype.(Random.randn(n_individuals) .* random_intercept_sd)
-        end
-        data_dict["beta0_random"] = beta0_random
+    if random_int_from_pool
+        beta0_random = sample(beta0_pool, n_individuals, replace=true)
+    else
+        beta0_random = dtype.(Random.randn(n_individuals) .* random_intercept_sd)
     end
+    data_dict["beta0_random"] = beta0_random
     
     # Predictor
     array_mu = zeros(n_individuals, n_repeated_measures)
