@@ -9,18 +9,18 @@ using ADTypes
 using Zygote
 using AdvancedVI
 
-abs_project_path = normpath(joinpath(@__FILE__, "..", "..", ".."))
-include(joinpath(abs_project_path, "src", "utils", "decayed_ada_grad.jl"))
-
 
 function update_parameters_dict(
     params_dict::OrderedDict;
     name::String,
-    dimension::Tuple,
-    log_prob_fun,
-    bij=Base.identity,
-    init=bij(zeros(dimension)),
-    dependency=[]
+    dim_theta::Tuple,
+    logpdf_prior,
+    dim_z::Int64,
+    vi_family,
+    init_z=randn(dim_z),
+    dependency=[],
+    random_variable::Bool=true,
+    noisy_gradient::Int64=0
     )
 
     if !("priors" in keys(params_dict))
@@ -37,47 +37,68 @@ function update_parameters_dict(
     # If first call
     if !("tot_params" in keys(params_dict))
         params_dict["tot_params"] = 0
-        params_dict["tot_params_t"] = 0
-        params_dict["ranges"] = []
-        params_dict["ranges_transformed"] = []
-        params_dict["bijectors"] = []
+        params_dict["ranges_theta"] = []
+
+        params_dict["tot_vi_weights"] = 0
+        params_dict["ranges_z"] = []
+        params_dict["vi_family_array"] = []
+        params_dict["reshape_array"] = []
+
+        params_dict["keys_prior_position"] = OrderedDict()
+        params_dict["random_weights"] = []
+        params_dict["noisy_gradients"] = []
     end
 
     if !(parameter_already_included)
-        # first time call
-        range = (params_dict["tot_params"] + 1):(params_dict["tot_params"] + prod(dimension))
-        params_dict["tot_params"] = params_dict["tot_params"] + prod(dimension)
-        # after bijector
-        prototype = bij(ones(prod(dimension)))
-        range_transformed = (params_dict["tot_params_t"] + 1):(params_dict["tot_params_t"] + prod(size(prototype)))
-        params_dict["tot_params_t"] = params_dict["tot_params_t"] + prod(size(prototype))
+        
+        # first time call #
+
+        # theta
+        range_theta = (params_dict["tot_params"] + 1):(params_dict["tot_params"] + prod(dim_theta))
+        params_dict["tot_params"] = params_dict["tot_params"] + prod(dim_theta)
+        # range VI weights (z)
+        range_z = (params_dict["tot_vi_weights"] + 1):(params_dict["tot_vi_weights"] + dim_z)
+        params_dict["tot_vi_weights"] = params_dict["tot_vi_weights"] + dim_z
+
     else
-        range = params_dict["priors"][name]["range"]
+        range_theta = params_dict["priors"][name]["range_theta"]
         params_dict["tot_params"] = params_dict["tot_params"]
-        range_transformed = params_dict["priors"][name]["range_transformed"]
+        # VI weights
+        range_z = params_dict["priors"][name]["range_z"]
+        params_dict["tot_vi_weights"] = params_dict["tot_vi_weights"]
+
     end
 
     new_prior = OrderedDict(
-        "size" => dimension,
-        "bij" => bij,
-        "range" => range,
-        "range_transformed" => range_transformed,
-        "log_prob" => log_prob_fun,
-        "init" => init,
-        "dependency" => dependency
+        "dim_theta" => dim_theta,
+        "range_theta" => range_theta,
+        "logpdf_prior" => logpdf_prior,
+        "dim_z" => dim_z,
+        "range_z" => range_z,
+        "vi_family" => vi_family,
+        "init_z" => init_z,
+        "dependency" => dependency,
+        "random_variable" => random_variable
     )
 
     params_dict["priors"][name] = new_prior
 
     # Create a tuple for the ranges and the transformations
     if !(parameter_already_included)
-        push!(params_dict["ranges"], params_dict["priors"][name]["range"])
-        push!(params_dict["ranges_transformed"], params_dict["priors"][name]["range_transformed"])
-        push!(params_dict["bijectors"], params_dict["priors"][name]["bij"])
+        push!(params_dict["ranges_theta"], params_dict["priors"][name]["range_theta"])
+        push!(params_dict["ranges_z"], params_dict["priors"][name]["range_z"])
+        push!(params_dict["vi_family_array"], params_dict["priors"][name]["vi_family"])
+        push!(params_dict["random_weights"], params_dict["priors"][name]["random_variable"])
+        append!(params_dict["noisy_gradients"], ones(dim_z) .* noisy_gradient)
+        push!(params_dict["reshape_array"], dim_theta)
+
+        params_dict["keys_prior_position"][Symbol(name)] = length(params_dict["vi_family_array"])
+        params_dict["tuple_prior_position"] = (; params_dict["keys_prior_position"]...)
     end
     
     return params_dict
 end
+
 
 function get_parameters_axes(params_dict)
     
@@ -85,26 +106,26 @@ function get_parameters_axes(params_dict)
         theta_components = tuple(Symbol.(params_dict["priors"].keys)...)
 
         vector_init = []
-        theta = []
+        # theta = []
         for pp in params_dict["priors"].keys
 
-            if prod(params_dict["priors"][pp]["size"]) > 1
-                param_init = params_dict["priors"][pp]["bij"](ones(params_dict["priors"][pp]["size"]))
+            if prod(params_dict["priors"][pp]["dim_theta"]) > 1
+                param_init = ones(params_dict["priors"][pp]["dim_theta"])
             else
-                param_init = params_dict["priors"][pp]["bij"](ones(params_dict["priors"][pp]["size"])[1])
+                param_init = ones(params_dict["priors"][pp]["dim_theta"])[1]
             end
             push!(vector_init, Symbol(pp) => param_init)
-            push!(theta, param_init...)
+            # push!(theta, param_init...)
         end
 
         proto_array = ComponentArray(; vector_init...)
         theta_axes = getaxes(proto_array)
 
-        begin
-            theta_components = ComponentArray(Float32.(theta), theta_axes)
-        end
+        # begin
+        #     theta_components = ComponentArray(Float32.(theta), theta_axes)
+        # end
 
-        return theta_axes, theta_components
+        return theta_axes
 end
 
 
@@ -161,7 +182,7 @@ function log_joint(theta; params_dict, theta_axes, model, log_likelihood, label,
     log_prior = 0f0
     for prior in keys(priors)
         deps = priors[prior]["dependency"]
-        log_prior += sum(priors[prior]["log_prob"](
+        log_prior += sum(priors[prior]["logpdf_prior"](
             theta_components[prior],
             [theta_components[dep] for dep in deps]...
         ))
@@ -189,6 +210,7 @@ end
 function training_loop(;
     log_joint,
     vi_dist,
+    optimizer,
     z_dim::Int64,
     n_iter::Int64,
     n_chains::Int64=1,
@@ -212,8 +234,6 @@ function training_loop(;
 
         # Define objective
         variational_objective = AdvancedVI.ELBO()
-        # Optimizer
-        optimizer = MyDecayedADAGrad()
         # VI algorithm
         alg = AdvancedVI.ADVI(samples_per_step, n_iter_tot, adtype=ADTypes.AutoZygote())
 

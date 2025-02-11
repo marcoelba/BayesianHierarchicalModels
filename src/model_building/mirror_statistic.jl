@@ -36,6 +36,28 @@ function posterior_ms_coefficients(;vi_posterior::Distributions.Distribution, pr
     return ms_dist_vec
 end
 
+
+function posterior_ms_coefficients(vi_posterior::Distributions.DiagNormal)
+
+    # get mean and std of the multivariate normal on the regression coefficients
+    mu = vi_posterior.μ
+    sigma = sqrt.(diag(vi_posterior.Σ))
+    
+    # MS Distribution
+    mean_vec = MirrorStatistic.mean_folded_normal.(mu, sigma) .- 
+        MirrorStatistic.mean_folded_normal.(0., sigma)
+
+    var_vec = MirrorStatistic.var_folded_normal.(mu, sigma) .+ 
+        MirrorStatistic.var_folded_normal.(0., sigma)
+
+    ms_dist_vec = arraydist([
+        Distributions.Normal(mean_ms, sqrt(var_ms)) for (mean_ms, var_ms) in zip(mean_vec, var_vec)
+    ])
+
+    return ms_dist_vec
+end
+
+
 function get_t(mirror_coeffs; fdr_target)
     
     optimal_t = 0

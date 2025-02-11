@@ -2,41 +2,76 @@
 
 module DistributionsLogPdf
 using LogExpFunctions: log1pexp
+using SpecialFunctions: logbeta
+
 
 function log_normal(
-    x::AbstractArray{Float32},
-    m::AbstractArray{Float32}=Float32.(zeros(size(x))),
-    s::AbstractArray{Float32}=Float32.(ones(size(x)));
-    mu::AbstractArray{Float32}=m,
-    sigma::AbstractArray{Float32}=s
+    x::AbstractArray,
+    m::AbstractArray=zeros(eltype(x), size(x)),
+    s::AbstractArray=ones(eltype(x), size(x));
+    mu::AbstractArray=m,
+    sigma::AbstractArray=s
     )
     -0.5f0 * log.(2*Float32(pi)) .- log.(sigma) .- 0.5f0 * ((x .- mu) ./ sigma).^2f0
 end
 
+log_normal(
+    x::AbstractArray;
+    mu::AbstractArray=zeros(eltype(x), size(x)),
+    sigma::AbstractArray=ones(eltype(x), size(x))
+) = log_normal(
+    x::AbstractArray,
+    mu::AbstractArray,
+    sigma::AbstractArray
+)
+
+
 function log_normal(
-    x::Float32,
-    mu::Float32=0f0,
-    sigma::Float32=1f0
+    x::Real,
+    mu::Real=0f0,
+    sigma::Real=1f0
     )
     -0.5f0 * log(2*Float32(pi)) - log(sigma) - 0.5f0 * ((x - mu) / sigma)^2f0
 end
 
 
+function log_half_normal(
+    x::Real,
+    sigma::Real=1f0
+    )
+    0.5f0 * log(2) - 0.5f0 * log(Float32(pi)) - log(sigma) - 0.5f0 * (x / sigma)^2f0
+end
+
+
 function log_half_cauchy(
-    x::AbstractArray{Float32},
-    s::AbstractArray{Float32}=Float32.(ones(size(x)));
-    sigma::AbstractArray{Float32}=s
+    x::AbstractArray,
+    sigma::AbstractArray=(eltype(x), ones(size(x)))
     )
     log(2f0) .- log.(Float32(pi) .* sigma) .- log.(1f0 .+ (x ./ sigma).^2f0)
 end
 
+log_half_cauchy(
+    x::AbstractArray;
+    sigma::AbstractArray
+) = log_half_cauchy(
+    x::AbstractArray,
+    sigma::AbstractArray
+)
+
+
 function log_half_cauchy(
-    x::Float32,
-    s::Float32=1f0;
-    sigma::Float32=s
+    x::Real,
+    s::Real=one(eltype(x));
+    sigma::Real=s
     )
     log(2f0) .- log.(Float32(pi) .* sigma) .- log.(1f0 .+ (x ./ sigma).^2f0)
 end
+
+
+function log_beta(x::AbstractArray, a::Real, b::Real)
+    (a - 1) .* log.(x) .+ (b - 1) .* log.(1 .- x) .- logbeta(a, b)
+end
+
 
 function log_bernoulli_from_logit(x::AbstractArray, logitp::AbstractArray)
     @. - (1 - x) * log1pexp(logitp) - x * log1pexp(-logitp)
@@ -85,44 +120,5 @@ function log_normal_mixture(
     log.(s) .+ offset
 end
 
-"""
-Log-pdf of a mixture of Normal distributions.
-    x::AbstractArray{<:Float32}
-    w::AbstractArray{<:Float32}
-    mu::AbstractArray{<:Float32}
-    sd::AbstractArray{<:Float32}
-"""
-function log_normal_mixture(
-    x::AbstractArray{<:Float32},
-    w::AbstractArray{<:Float32},
-    mu::AbstractArray{<:Float32},
-    sd::AbstractArray{<:Float32}
-    )
-    f(x_array) = log_normal_mixture(x_array, w, mu, sd)
-    # log_normal_mixture.(x, Ref(w), Ref(mu), Ref(sd))
-    f.(x)
-end
-
-"""
-Log-likelihood of a mixture of Normal distributions (TEMP).
-    x::AbstractArray{<:Float32} (n x 1)
-    w::AbstractArray{<:Float32} (1 x n_clusters)
-    mu::AbstractArray{<:Float32} (n x n_clusters)
-    sd::AbstractArray{<:Float32} (n x n_clusters)
-"""
-function loglik_normal_mixture(
-    x::AbstractArray{<:Float32},
-    weights::AbstractArray{<:Float32},
-    mu::AbstractArray{<:Float32},
-    sigma::AbstractArray{<:Float32}
-    )
-
-    xstd = -0.5f0 .* ((x .- mu) ./ sigma).^2f0
-    wstd = weights ./ (sqrt(2f0 .* Float32(pi)) .* sigma)
-    offset = maximum(xstd .* wstd, dims=2)
-    xe = exp.(xstd .- offset)
-    s = sum(xe .* wstd, dims=2)
-    log.(s) .+ offset
-end
 
 end
