@@ -59,6 +59,26 @@ function get_parameters_axes(params_dict)
 end
 
 
+function rand_z_dropout(params_dict; dtype=Float64)
+    z = []
+
+    for prior in keys(params_dict["priors"])
+        pp = params_dict["priors"][prior]
+
+        if pp["can_dropout"]
+            # for the mean
+            append!(z, rand([0., 1.], Int(pp["dim_z"]/2)))
+            # for the var
+            append!(z, ones(Int(pp["dim_z"]/2)))
+        else
+            append!(z, ones(pp["dim_z"]))
+        end
+    end
+
+    return dtype.(z)
+end
+
+
 function elbo(
     z::AbstractArray;
     y::AbstractArray,
@@ -126,7 +146,9 @@ function hybrid_training_loop(;
     use_noisy_grads::Bool=false,
     elbo_samples::Int64=1,
     lr_schedule=nothing,
-    n_repeated_measures::Int64=1
+    n_repeated_measures::Int64=1,
+    dropout::Bool=false,
+    start_dropout_iter::Int=0
     )
 
     vi_family_array = params_dict["vi_family_array"]
@@ -179,6 +201,11 @@ function hybrid_training_loop(;
         if use_noisy_grads
             rand_z = randn(eltype(z), length(z)) .* noisy_gradients .* lr_schedule[iter]
             z .+= rand_z
+        end
+
+        if dropout && iter > start_dropout_iter
+            rand_drop = rand_z_dropout(params_dict; dtype=eltype(z))
+            z .*= rand_drop
         end
 
         # store

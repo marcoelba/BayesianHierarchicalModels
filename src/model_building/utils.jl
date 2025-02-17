@@ -20,7 +20,8 @@ function update_parameters_dict(
     init_z=randn(dim_z),
     dependency=[],
     random_variable::Bool=true,
-    noisy_gradient::Int64=0
+    noisy_gradient::Int64=0,
+    can_dropout::Bool=false
     )
 
     if !("priors" in keys(params_dict))
@@ -78,7 +79,8 @@ function update_parameters_dict(
         "vi_family" => vi_family,
         "init_z" => init_z,
         "dependency" => dependency,
-        "random_variable" => random_variable
+        "random_variable" => random_variable,
+        "can_dropout" => can_dropout
     )
 
     params_dict["priors"][name] = new_prior
